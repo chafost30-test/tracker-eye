@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tracker Eye</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: one screen, no scrolling. Live numbers left · camera centre · controls right (2 columns) */
+:root{
+  --bg:#0e1214; --panel:#161c1f; --line:#273136; --fg:#dfe7ea; --dim:#7f8f96;
+  --lock:#3cff8f; --aim:#ffb020; --warn:#ff5a4f; --pred:#3aa0ff; --real:#c792ff;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --head:"Space Grotesk",system-ui,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--fg);font:13px/1.4 var(--mono);padding:12px 16px;display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;align-items:baseline;gap:16px;margin-bottom:10px;flex:none}
+h1{font:700 22px var(--head);margin:0;letter-spacing:.02em}
+.sub{color:var(--dim);font-size:12px;margin:0}
+.units{margin-left:auto;font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+.units.on{border-color:var(--real);color:var(--real)}
+.wrap{flex:1;min-height:0;display:grid;grid-template-columns:270px minmax(0,1fr) 560px;gap:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;min-height:0;overflow:auto}
+h2{font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.12em;color:var(--dim);margin:0 0 6px}
+
+/* Live numbers */
+.live{display:flex;flex-direction:column;gap:6px}
+.stat{border-bottom:1px solid var(--line);padding:4px 0 7px}
+.stat:last-child{border-bottom:0}
+.stat .k{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--dim)}
+.stat .v{font:700 24px/1.15 var(--head);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat .v.sm{font-size:18px}
+.stat .s{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.v.lock{color:var(--lock)} .v.nolock{color:var(--warn)}
+.v.pred{color:var(--pred)} .v.real{color:var(--real)}
+
+/* Camera */
+.center{min-height:0;display:flex;justify-content:center;align-items:flex-start}
+.stage{position:relative;background:#000;border:1px solid var(--line);border-radius:6px;overflow:hidden;aspect-ratio:16/9;width:100%;max-width:calc((100vh - 70px) * 16 / 9)}
+.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;cursor:crosshair}
+.stage .msg{position:absolute;inset:0;pointer-events:none;display:grid;place-items:center;color:var(--dim);text-align:center;padding:24px}
+.hud{position:absolute;left:10px;top:10px;font-size:12px;background:rgba(0,0,0,.55);padding:6px 8px;border-radius:4px;pointer-events:none;font-variant-numeric:tabular-nums}
+
+/* Controls */
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;align-content:start}
+.controls section{display:flex;flex-direction:column;gap:5px;min-width:0}
+label{display:block;font-size:11px;color:var(--dim)}
+label span{color:var(--fg)}
+select,button,input[type=range]{width:100%;margin:0}
+.num,select,button{background:#0e1214;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px 8px;font:inherit;font-size:12px}
+.num{width:100%}
+button{cursor:pointer}
+button:hover{border-color:var(--dim)}
+button.active{border-color:var(--real);color:var(--real)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--aim);outline-offset:2px}
+.row{display:flex;gap:6px}
+.row>*{flex:1;min-width:0}
+.swatch{display:flex;align-items:center;gap:8px;font-size:12px}
+.swatches{display:flex;gap:3px;flex-wrap:wrap;flex:none;max-width:100px}
+.swatches i{width:18px;height:18px;border-radius:3px;border:1px solid var(--line);background:#333;flex:none}
+.chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg)}
+.chk input{width:auto;margin:0}
+.hint{font-size:11px;color:var(--dim);margin:0}
+
+/* Narrower screens: allow scrolling and stack */
+@media (max-width:1300px){
+  body{overflow:auto;height:auto}
+  .wrap{grid-template-columns:1fr}
+  .stage{max-width:100%}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tracker Eye</h1>
+  <p class="sub">Lock on by colour, predict where it goes, measure it in real feet.</p>
+  <span class="units" id="units">Units: pixels (mark both rulers for feet)</span>
+</header>
+<div class="wrap">
+  <aside class="panel live" aria-label="Live numbers">
+    <h2>Live numbers</h2>
+    <div class="stat"><div class="k">Status</div><div class="v nolock" id="st">no target</div></div>
+    <div class="stat"><div class="k">Speed</div><div class="v" id="spd">–</div><div class="s" id="spdsub">&nbsp;</div></div>
+    <div class="stat"><div class="k">Position</div><div class="v real sm" id="rpos">–</div><div class="s" id="pos">&nbsp;</div></div>
+    <div class="stat"><div class="k">Distance from camera</div><div class="v real sm" id="rdist">–</div><div class="s" id="rdistsub">needs ruler gap</div></div>
+    <div class="stat"><div class="k">Height · landing</div><div class="v real sm" id="rheight">–</div><div class="s" id="rland">needs rulers + gap</div></div>
+    <div class="stat"><div class="k">Velocity (side · out · up)</div><div class="v sm" id="rvel">–</div><div class="s" id="vel">&nbsp;</div></div>
+    <div class="stat"><div class="k">Heading · turn rate</div><div class="v sm" id="heading">–</div><div class="s" id="turnrate">&nbsp;</div></div>
+    <div class="stat"><div class="k">Predicted in <span id="predt">0.50</span> s</div><div class="v pred sm" id="rpred">–</div><div class="s" id="pred-out">&nbsp;</div></div>
+    <div class="stat"><div class="k">Target size</div><div class="v sm" id="rsize">–</div><div class="s" id="size">&nbsp;</div></div>
+    <div class="stat"><div class="k">Camera</div><div class="v sm" id="fps">–</div><div class="s" id="res">&nbsp;</div></div>
+  </aside>
+
+  <main class="center">
+    <div class="stage" id="stage">
+      <canvas id="view"></canvas>
+      <div class="msg" id="msg">Click “Start camera” and allow camera access.</div>
+      <div class="hud" id="hud" hidden></div>
+    </div>
+  </main>
+
+  <aside class="panel controls" aria-label="Controls">
+    <section>
+      <h2>Camera</h2>
+      <select id="cam" aria-label="Camera device"><option value="">— start camera first —</option></select>
+      <div class="row"><button id="start">Start camera</button><button id="stop">Stop</button></div>
+
+      <h2 style="margin-top:8px">Target colour</h2>
+      <div class="swatch"><span id="sws" class="swatches"><i></i></span><span id="swtxt">Click the target in the video</span></div>
+      <p class="hint">Click = new colour · Shift-click = add a sample</p>
+      <button id="clear">Clear samples</button>
+      <label for="tol">Colour tolerance <span id="tolv">25</span></label>
+      <input type="range" id="tol" min="5" max="80" value="25">
+      <label for="strict">Strictness <span id="strictv">70</span>% (ignore dull colours)</label>
+      <input type="range" id="strict" min="20" max="95" value="70">
+      <label for="minpx">Min blob size <span id="minpxv">40</span> px</label>
+      <input type="range" id="minpx" min="5" max="1000" value="40">
+      <label for="merge">Merge gap <span id="mergev">3</span> (join thin parts)</label>
+      <input type="range" id="merge" min="0" max="8" value="3">
+      <label class="chk"><input type="checkbox" id="mask"> Show mask</label>
+      <label class="chk"><input type="checkbox" id="trail" checked> Show trail</label>
+      <label class="chk"><input type="checkbox" id="mirror"> Mirror view</label>
+    </section>
+
+    <section>
+      <h2>Prediction</h2>
+      <label class="chk"><input type="checkbox" id="pred" checked> Show blue prediction line</label>
+      <select id="model" aria-label="Motion model">
+        <option value="ball" selected>Ball: 3D gravity + bounces</option>
+        <option value="turn">Car: turning arc on the floor</option>
+        <option value="accel">Thrown ball, on screen only</option>
+        <option value="line">Straight line</option>
+      </select>
+      <label for="balld">Ball diameter (in) · basketball 9.4</label>
+      <input type="number" id="balld" class="num" value="9.4" min="1" step="0.1">
+      <label for="ahead">Predict ahead <span id="aheadv">0.50</span> s</label>
+      <input type="range" id="ahead" min="10" max="200" value="50">
+      <label for="win">Smoothing <span id="winv">400</span> ms</label>
+      <input type="range" id="win" min="100" max="1000" step="50" value="400">
+      <label for="minspd">Ignore below <span id="minspdv">40</span> px/s</label>
+      <input type="range" id="minspd" min="0" max="300" step="10" value="40">
+
+      <h2 style="margin-top:8px">Floor rulers</h2>
+      <p class="hint">Lay a ruler across the far end of the view and one across the bottom. Click a button, then both ends of that ruler.</p>
+      <div class="row"><button id="rFar">Mark far</button><button id="rNear">Mark near</button></div>
+      <div class="row">
+        <div><label for="rlen">Ruler length (ft)</label><input type="number" id="rlen" class="num" value="1" min="0.1" step="0.1"></div>
+        <div><label for="rgap">Gap between (ft)</label><input type="number" id="rgap" class="num" min="0" step="0.1" placeholder="tape it"></div>
+      </div>
+      <label class="chk"><input type="checkbox" id="showmap" checked> Show top + side views</label>
+      <button id="rReset">Clear rulers</button>
+      <p class="hint" id="calStatus">No rulers marked.</p>
+    </section>
+  </aside>
+</div>
+
+<!-- Safari stops updating a display:none video, so keep it "visible" but off-screen -->
+<video id="vid" playsinline muted autoplay style="position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0"></video>
+<script>
+const $ = id => document.getElementById(id);
+const vid = $('vid'), cv = $('view'), ctx = cv.getContext('2d', {willReadFrequently:true});
+const work = document.createElement('canvas'), wctx = work.getContext('2d', {willReadFrequently:true});
+let stream = null, samples = [], trail = [], last = null, track = null, holdMiss = 0, frames = 0, fpsT = performance.now();
+
+function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;
+  if(d){h=mx===r?((g-b)/d)%6:mx===g?(b-r)/d+2:(r-g)/d+4;h*=60;if(h<0)h+=360}
+  return [h, mx?d/mx:0, mx];}
+
+async function listCams(){
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+  const sel = $('cam'), cur = stream?.getVideoTracks()[0]?.getSettings().deviceId;
+  sel.innerHTML = devs.map((d,i)=>`<option value="${d.deviceId}">${d.label||'Camera '+(i+1)}</option>`).join('');
+  if(cur) sel.value = cur;
+}
+
+async function start(deviceId){
+  stop();
+  $('msg').hidden = false; $('msg').textContent = 'Starting camera…';
+  const video = {width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60}};
+  if(deviceId) video.deviceId = {exact:deviceId};
+  try{
+    try{ stream = await navigator.mediaDevices.getUserMedia({video, audio:false}); }
+    catch(e){
+      if(e.name !== 'OverconstrainedError') throw e;
+      // Fall back to the plainest request the browser will accept
+      stream = await navigator.mediaDevices.getUserMedia({video: deviceId ? {deviceId} : true, audio:false});
+    }
+  }catch(e){ $('msg').textContent = 'Camera failed (' + (e.name || 'error') + (e.message ? ': ' + e.message : '') + '). Allow camera access for this page, and in System Settings → Privacy & Security → Camera, for your browser.'; return; }
+  vid.srcObject = stream; await vid.play();
+  $('msg').hidden = true; $('hud').hidden = false;
+  await listCams();
+  const s = stream.getVideoTracks()[0].getSettings();
+  $('res').textContent = `${s.width}×${s.height}`;
+  nextFrame();
+}
+function stop(){ if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;} }
+
+$('start').onclick = () => start($('cam').value || undefined);
+$('stop').onclick = () => { stop(); $('msg').hidden=false; $('msg').textContent='Camera stopped.'; $('hud').hidden=true; };
+$('cam').onchange = e => start(e.target.value);
+$('tol').oninput = e => $('tolv').textContent = e.target.value;
+$('minpx').oninput = e => $('minpxv').textContent = e.target.value;
+
+// Click the video to pick the target colour. Looks at a 21×21 patch but only keeps
+// pixels with real colour: grey, near-black (seams, shadows) and glare have no
+// meaningful hue and would make the filter match almost anything dark.
+cv.addEventListener('click', ev => {
+  if(!stream && !window.__fakeCam) return;
+  const r = cv.getBoundingClientRect();
+  const scale = Math.min(r.width/cv.width, r.height/cv.height);
+  const ox = (r.width - cv.width*scale)/2, oy = (r.height - cv.height*scale)/2;
+  const x = Math.round((ev.clientX - r.left - ox)/scale), y = Math.round((ev.clientY - r.top - oy)/scale);
+  if(rulerPick){ rulerClick(x, y); return; }   // in ruler mode, clicks mark ruler ends
+  const d = ctx.getImageData(Math.max(0,x-10), Math.max(0,y-10), 21, 21).data;
+  const good = [];
+  for(let i=0;i<d.length;i+=4){ const q = rgbToHsv(d[i],d[i+1],d[i+2]); if(q[1] >= 0.3 && q[2] >= 0.25 && q[2] <= 0.97) good.push([q, d[i], d[i+1], d[i+2]]); }
+  if(good.length < 20){
+    $('swtxt').textContent = 'That spot is too dark, grey or shiny to track. Click a bright, colourful part of the target.';
+    return;
+  }
+  // circular average for hue (so reds near 0°/360° don't average to cyan), medians for the rest
+  let hx=0, hy=0; for(const [q] of good){ hx += Math.cos(q[0]*Math.PI/180); hy += Math.sin(q[0]*Math.PI/180); }
+  const med = a => a.sort((m,n)=>m-n)[a.length>>1];
+  const hsv = [(Math.atan2(hy,hx)*180/Math.PI+360)%360, med(good.map(g=>g[0][1])), med(good.map(g=>g[0][2]))];
+  const R = med(good.map(g=>g[1])), G = med(good.map(g=>g[2])), B = med(good.map(g=>g[3]));
+  if(!ev.shiftKey) samples = [];
+  samples.push({hsv, rgb:`rgb(${R},${G},${B})`});
+  trail = []; last = null; track = null;
+  renderSwatches();
+});
+function renderSwatches(){
+  $('sws').innerHTML = samples.length ? samples.map(s=>`<i style="background:${s.rgb}"></i>`).join('') : '<i></i>';
+  $('swtxt').textContent = samples.length
+    ? `${samples.length} sample${samples.length>1?'s':''}` + (samples.length===1?` · hue ${samples[0].hsv[0]|0}°`:'')
+    : 'Click the target in the video';
+}
+$('clear').onclick = () => { samples = []; trail = []; last = null; renderSwatches(); };
+$('merge').oninput = e => $('mergev').textContent = e.target.value;
+$('strict').oninput = e => $('strictv').textContent = e.target.value;
+// ---- Floor rulers → camera model ----------------------------------------
+// Each ruler gives "pixels per foot" at its row. On a flat floor that scale falls
+// in a straight line up the image and reaches zero at the horizon. Together with
+// the gap between the rulers, that is enough to solve the whole camera:
+//   f  focal length in pixels      θ  tilt below level      h  height above the floor
+// World axes (feet): x = right, up = height above the floor, f = forward along the floor.
+let rulers = {far:null, near:null}, rulerPick = null, mapTrail = [], viewPred = null;
+const rulerScale = rl => Math.hypot(rl.b[0]-rl.a[0], rl.b[1]-rl.a[1]) / (+$('rlen').value || 1);
+const rulerRow = rl => (rl.a[1] + rl.b[1]) / 2;
+const rulerMidX = rl => (rl.a[0] + rl.b[0]) / 2;
+function rulerGeom(){
+  if(!rulers.far || !rulers.near) return null;
+  const y1 = rulerRow(rulers.far), y2 = rulerRow(rulers.near), s1 = rulerScale(rulers.far), s2 = rulerScale(rulers.near);
+  if(Math.abs(y2 - y1) < 5) return null;
+  const gap = parseFloat($('rgap').value);
+  // camera depth = f / scale, so the gap fixes f (strictly f / cos θ; corrected in calib)
+  const fe = (gap > 0 && s2 > s1) ? gap / (1/s1 - 1/s2) : null;
+  return {y1, y2, s1, s2, fe};
+}
+function calib(){
+  const g = rulerGeom(); if(!g || !g.fe) return null;
+  const cx = cv.width/2, cy = cv.height/2;
+  const yh = g.y1 - g.s1 * (g.y2 - g.y1) / (g.s2 - g.s1);   // horizon row, where scale → 0
+  const sin = (cy - yh) / g.fe;                              // sin θ = (centre − horizon) / fe
+  if(!(Math.abs(sin) < 0.99)) return null;
+  const th = Math.asin(sin), cos = Math.cos(th), f = g.fe * cos;
+  const h = (f / g.s2) * (cos * (g.y2 - cy) / f + sin);      // height from the near ruler's ray
+  if(!(h > 0)) return null;
+  return {f, th, sin, cos, h, cx, cy};
+}
+// pixel → viewing ray in camera axes (x right, y down the image, z out of the lens)
+const ray = (c, u, v) => [(u - c.cx)/c.f, (v - c.cy)/c.f, 1];
+// camera-axis point → world feet
+const camToWorld = (c, [x, y, z]) => ({x, up: c.h - c.cos*y - c.sin*z, f: c.cos*z - c.sin*y});
+// world feet → pixel (null if behind the camera)
+function worldToPx(c, p){
+  if(!p) return null;
+  const U = p.up - c.h, y = -c.cos*U - c.sin*p.f, z = c.cos*p.f - c.sin*U;
+  return z > 0.05 ? [c.cx + c.f*p.x/z, c.cy + c.f*y/z] : null;
+}
+// where the ray through pixel (u,v) crosses the horizontal plane at height H0
+function pxToPlane(c, u, v, H0){
+  const r = ray(c, u, v), den = c.cos*r[1] + c.sin;
+  if(den <= 1e-4) return null;                 // at or above the horizon
+  const t = (c.h - H0) / den; if(t <= 0) return null;
+  return camToWorld(c, [r[0]*t, r[1]*t, t]);
+}
+// Rulers without a gap: sideways feet only
+function floorPosLateral(x, y, W){
+  const g = rulerGeom(); if(!g || g.s2 <= g.s1) return null;
+  const s = g.s1 + (g.s2 - g.s1) * (y - g.y1) / (g.y2 - g.y1);
+  return s > 0.5 ? {x: (x - W/2) / s, s} : null;
+}
+const rulerFloor = (c, k) => rulers[k] && pxToPlane(c, rulerMidX(rulers[k]), rulerRow(rulers[k]), 0);
+
+function startRuler(which){
+  rulerPick = {which, pts:[]};
+  $('rFar').classList.toggle('active', which==='far'); $('rNear').classList.toggle('active', which==='near');
+  $('calStatus').textContent = `Click the LEFT end of the ${which} ruler in the video.`;
+}
+function rulerClick(x, y){
+  rulerPick.pts.push([x,y]);
+  if(rulerPick.pts.length === 1){ $('calStatus').textContent = `Now click the RIGHT end of the ${rulerPick.which} ruler.`; return; }
+  rulers[rulerPick.which] = {a:rulerPick.pts[0], b:rulerPick.pts[1]};
+  rulerPick = null; trail = []; mapTrail = [];
+  $('rFar').classList.remove('active'); $('rNear').classList.remove('active');
+  updateCalStatus();
+}
+function updateCalStatus(){
+  const g = rulerGeom();
+  if(!rulers.far && !rulers.near){ $('calStatus').textContent = 'No rulers marked.'; return; }
+  if(!g){ $('calStatus').textContent = `${rulers.far ? 'Far' : 'Near'} ruler marked. Now mark the ${rulers.far ? 'near' : 'far'} one.`; return; }
+  if(g.s2 <= g.s1){ $('calStatus').textContent = 'The near ruler looks shorter than the far one. Did you swap them?'; return; }
+  let msg = `Rulers set ✓ Far ${g.s1.toFixed(0)} px/ft, near ${g.s2.toFixed(0)} px/ft.`;
+  const c = calib();
+  if(c){
+    const n = rulerFloor(c, 'near'), fa = rulerFloor(c, 'far');
+    msg += ` Camera is ${c.h.toFixed(2)} ft up, tilted ${deg(c.th)}° down. Near ruler ${n ? n.f.toFixed(2) : '?'} ft out, far ${fa ? fa.f.toFixed(2) : '?'} ft. Tape-measure these to check.`;
+  } else if(parseFloat($('rgap').value) > 0){
+    msg += ' Those rulers and that gap don’t fit a flat floor. Re-mark them or re-measure the gap.';
+  } else msg += ' Enter the gap between the rulers to turn on 3D.';
+  $('calStatus').textContent = msg;
+}
+function drawRulers(W, H){
+  ctx.save(); ctx.strokeStyle = '#c792ff'; ctx.fillStyle = '#c792ff'; ctx.lineWidth = 3;
+  ctx.font = '600 18px "JetBrains Mono", monospace';
+  for(const k of ['far','near']){
+    const rl = rulers[k]; if(!rl) continue;
+    ctx.beginPath(); ctx.moveTo(...rl.a); ctx.lineTo(...rl.b);
+    for(const p of [rl.a, rl.b]){ ctx.moveTo(p[0], p[1]-10); ctx.lineTo(p[0], p[1]+10); }
+    ctx.stroke();
+    ctx.fillText(`${$('rlen').value} ft (${k})`, Math.min(rl.a[0], rl.b[0]), Math.min(rl.a[1], rl.b[1]) - 14);
+  }
+  if(rulerPick) for(const p of rulerPick.pts){ ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fill(); }
+  ctx.restore();
+  const c = calib();
+  if($('showmap').checked && c) drawViews(W, H, c);
+}
+
+// ---- Top view + side view -----------------------------------------------
+function drawViews(W, H, c){
+  const size = Math.round(H*0.34), pad = 12, gapPx = 10, sw = Math.round(size*1.4);
+  const y0 = H - size - pad, tx0 = W - size - pad, sx0 = tx0 - gapPx - sw;
+  const nr = rulerFloor(c, 'near'), fr = rulerFloor(c, 'far');
+  const pathW = viewPred ? viewPred.path : [];
+  let maxF = Math.max(fr ? fr.f*1.25 : 4, 3), maxUp = Math.max(c.h*1.4, 3), maxX = 1;
+  for(const p of mapTrail.concat(pathW)){ maxF = Math.max(maxF, p.f*1.08); maxUp = Math.max(maxUp, p.up*1.15); maxX = Math.max(maxX, Math.abs(p.x)); }
+  maxF = Math.min(maxF, (fr ? fr.f : 10) * 3);
+  const panel = (x0, w, title) => {
+    ctx.fillStyle = 'rgba(14,18,20,.85)'; ctx.fillRect(x0, y0, w, size);
+    ctx.font = '600 12px "JetBrains Mono", monospace'; ctx.fillStyle = '#7f8f96'; ctx.fillText(title, x0 + 8, y0 + 16);
+  };
+  const dot = (x, y, rad, col) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, rad, 0, 7); ctx.fill(); };
+  const cross = (x, y) => { ctx.beginPath(); ctx.moveTo(x-5, y-5); ctx.lineTo(x+5, y+5); ctx.moveTo(x+5, y-5); ctx.lineTo(x-5, y+5); ctx.stroke(); };
+  const poly = (pts, col, wdt) => { ctx.strokeStyle = col; ctx.lineWidth = wdt; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke(); };
+
+  // TOP VIEW: camera at the bottom middle, looking up the panel
+  ctx.save(); ctx.beginPath(); ctx.rect(tx0, y0, size, size); ctx.clip();
+  panel(tx0, size, 'TOP VIEW · 1 ft grid');
+  const sc = Math.min((size - 34) / maxF, (size/2 - 10) / Math.max(maxX, maxF*0.4));
+  const camX = tx0 + size/2, camY = y0 + size - 12, P = p => [camX + p.x*sc, camY - p.f*sc];
+  ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1;
+  for(let z = 1; z < maxF; z++){ const y = camY - z*sc; ctx.beginPath(); ctx.moveTo(tx0, y); ctx.lineTo(tx0+size, y); ctx.stroke(); }
+  ctx.strokeStyle = '#c792ff'; ctx.lineWidth = 2; const half = (+$('rlen').value || 1)/2;
+  for(const r of [nr, fr]) if(r){ ctx.beginPath(); ctx.moveTo(...P({x:r.x-half, f:r.f})); ctx.lineTo(...P({x:r.x+half, f:r.f})); ctx.stroke(); }
+  for(const p of mapTrail){ const [x, y] = P(p); ctx.fillStyle = '#ffb020'; ctx.fillRect(x-1.5, y-1.5, 3, 3); }
+  if(viewPred){
+    poly(viewPred.path.map(P), '#3aa0ff', 3);
+    for(const q of viewPred.ticks){ const [x, y] = P(q); dot(x, y, 3, '#3aa0ff'); }
+    ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
+    for(const b of viewPred.bounces){ const [x, y] = P(b); cross(x, y); }
+  }
+  if(mapTrail.length){ const [x, y] = P(mapTrail[mapTrail.length-1]); dot(x, y, 6, '#3cff8f'); }
+  ctx.fillStyle = '#dfe7ea'; ctx.beginPath(); ctx.moveTo(camX, camY-8); ctx.lineTo(camX-7, camY+6); ctx.lineTo(camX+7, camY+6); ctx.fill();
+  ctx.restore();
+
+  // SIDE VIEW: distance out along the floor → right, height → up; camera on the left
+  ctx.save(); ctx.beginPath(); ctx.rect(sx0, y0, sw, size); ctx.clip();
+  panel(sx0, sw, 'SIDE VIEW · height vs distance');
+  const ss = Math.min((sw - 30) / maxF, (size - 40) / maxUp);
+  const ox = sx0 + 16, oy = y0 + size - 14, S = p => [ox + p.f*ss, oy - p.up*ss];
+  ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1;
+  for(let z = 1; z < maxUp; z++){ const y = oy - z*ss; ctx.beginPath(); ctx.moveTo(sx0, y); ctx.lineTo(sx0+sw, y); ctx.stroke(); }
+  for(let z = 1; z < maxF; z++){ const x = ox + z*ss; ctx.beginPath(); ctx.moveTo(x, y0+22); ctx.lineTo(x, oy); ctx.stroke(); }
+  ctx.strokeStyle = '#7f8f96'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx0, oy); ctx.lineTo(sx0+sw, oy); ctx.stroke();   // floor
+  ctx.strokeStyle = '#c792ff'; for(const r of [nr, fr]) if(r){ const [x] = S({f:r.f, up:0}); ctx.beginPath(); ctx.moveTo(x, oy-6); ctx.lineTo(x, oy+6); ctx.stroke(); }
+  const [cxS, cyS] = S({f:0, up:c.h});                                   // camera and its view direction
+  ctx.strokeStyle = 'rgba(223,231,234,.35)'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(cxS, cyS); ctx.lineTo(cxS + Math.cos(c.th)*sw, cyS + Math.sin(c.th)*sw); ctx.stroke(); ctx.setLineDash([]);
+  dot(cxS, cyS, 5, '#dfe7ea');
+  for(const p of mapTrail){ const [x, y] = S(p); ctx.fillStyle = '#ffb020'; ctx.fillRect(x-1.5, y-1.5, 3, 3); }
+  if(viewPred){
+    poly(viewPred.path.map(S), '#3aa0ff', 3);
+    for(const q of viewPred.ticks){ const [x, y] = S(q); dot(x, y, 3, '#3aa0ff'); }
+    ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
+    for(const b of viewPred.bounces){ const [x, y] = S({f:b.f, up:0}); cross(x, y); }
+  }
+  if(mapTrail.length){ const [x, y] = S(mapTrail[mapTrail.length-1]); dot(x, y, 6, '#3cff8f'); }
+  ctx.restore();
+}
+$('rFar').onclick = () => startRuler('far');
+$('rNear').onclick = () => startRuler('near');
+$('rReset').onclick = () => { rulers = {far:null, near:null}; rulerPick = null; trail = []; mapTrail = []; updateCalStatus(); };
+$('rgap').oninput = $('rlen').oninput = $('balld').oninput = () => { trail = []; mapTrail = []; updateCalStatus(); };
+$('model').onchange = () => { trail = []; mapTrail = []; };
+
+$('ahead').oninput = e => { $('aheadv').textContent = $('predt').textContent = (e.target.value/100).toFixed(2); };
+$('win').oninput = e => $('winv').textContent = e.target.value;
+$('minspd').oninput = e => $('minspdv').textContent = e.target.value;
+
+// Run once per NEW camera frame, stamped with when the camera took it. (Plain
+// requestAnimationFrame can process the same frame twice or stamp it late,
+// which makes speeds wrong.) Falls back to requestAnimationFrame if unsupported.
+const hasVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+function nextFrame(){ hasVFC ? vid.requestVideoFrameCallback(loop) : requestAnimationFrame(() => loop()); }
+function loop(_now, meta){
+  if(!stream) return;
+  const frameT = meta ? (meta.captureTime || meta.expectedDisplayTime || performance.now()) : performance.now();
+  if(vid.readyState >= 2){
+    const W = vid.videoWidth, H = vid.videoHeight;
+    if(cv.width!==W){cv.width=W;cv.height=H;}
+    ctx.save();
+    if($('mirror').checked){ctx.translate(W,0);ctx.scale(-1,1);}
+    ctx.drawImage(vid,0,0,W,H); ctx.restore();
+    if(samples.length) detect(W, H, frameT);
+    drawCross(W,H);
+    drawRulers(W,H);
+    frames++;
+    const now = performance.now();
+    if(now - fpsT > 500){ $('fps').textContent = (frames*1000/(now-fpsT)).toFixed(0) + ' fps'; frames=0; fpsT=now; }
+  }
+  nextFrame();
+}
+
+// Detection on a downscaled copy for speed (1/4 size)
+function detect(W, H, frameT){
+  const s = 4, w = (W/s)|0, h = (H/s)|0;
+  work.width = w; work.height = h;
+  wctx.drawImage(cv,0,0,w,h);
+  const img = wctx.getImageData(0,0,w,h), d = img.data;
+  const tol = +$('tol').value, N = w*h, k = +$('strict').value/100;
+
+  // 1. Colour match: a pixel is a "hit" if it is close to ANY sample
+  const hit = new Uint8Array(N);
+  for(let i=0,p=0;i<d.length;i+=4,p++){
+    const [hh,ss,vv] = rgbToHsv(d[i],d[i+1],d[i+2]);
+    for(const {hsv:[th,ts,tv]} of samples){
+      let dh = Math.abs(hh-th); if(dh>180) dh=360-dh;
+      if(dh < tol && ss > Math.max(ts*k, 0.2) && vv > Math.max(tv*k*0.8, 0.15)){ hit[p]=1; break; }
+    }
+  }
+
+  // 2. Merge: grow each hit by `gap` cells so thin wires join into one blob
+  const gap = +$('merge').value;
+  let grown = hit;
+  if(gap > 0){
+    const tmp = new Uint8Array(N); grown = new Uint8Array(N);
+    for(let y=0;y<h;y++){ let run=-1e9; for(let x=0;x<w;x++){ if(hit[y*w+x]) run=x; if(x-run<=gap) tmp[y*w+x]=1; }
+                          run=1e9; for(let x=w-1;x>=0;x--){ if(hit[y*w+x]) run=x; if(run-x<=gap) tmp[y*w+x]=1; } }
+    for(let x=0;x<w;x++){ let run=-1e9; for(let y=0;y<h;y++){ if(tmp[y*w+x]) run=y; if(y-run<=gap) grown[y*w+x]=1; }
+                          run=1e9; for(let y=h-1;y>=0;y--){ if(tmp[y*w+x]) run=y; if(run-y<=gap) grown[y*w+x]=1; } }
+  }
+
+  // 3. Find every connected blob. Box and counts use real colour hits only
+  //    (the merge padding would make a ball look bigger, i.e. closer).
+  const label = new Int32Array(N), stack = [], comps = [];
+  let id = 0;
+  for(let p=0;p<N;p++){
+    if(!grown[p] || label[p]) continue;
+    id++; label[p]=id; stack.push(p);
+    let cnt=0, sx=0, sy=0, x0=w, y0=h, x1=0, y1=0;
+    while(stack.length){
+      const q = stack.pop(), qx = q%w, qy = (q/w)|0;
+      if(hit[q]){ cnt++; sx+=qx; sy+=qy; if(qx<x0)x0=qx; if(qx>x1)x1=qx; if(qy<y0)y0=qy; if(qy>y1)y1=qy; }
+      if(qx>0   && grown[q-1] && !label[q-1]){label[q-1]=id;stack.push(q-1);}
+      if(qx<w-1 && grown[q+1] && !label[q+1]){label[q+1]=id;stack.push(q+1);}
+      if(qy>0   && grown[q-w] && !label[q-w]){label[q-w]=id;stack.push(q-w);}
+      if(qy<h-1 && grown[q+w] && !label[q+w]){label[q+w]=id;stack.push(q+w);}
+    }
+    if(cnt) comps.push({id,cnt,sx,sy,x0,y0,x1,y1});
+  }
+
+  // 4. Shape of a blob. Fill each row between its first and last hit (so a basketball's
+  //    dark seams don't punch holes), then take second moments of that shape:
+  //    centre, diameter = shortest axis (sub-pixel, unaffected by motion blur), and
+  //    roundness = short axis ÷ long axis (1 = circle, a leg ≈ 0.3).
+  const shapeOf = b => {
+    let S0=0, Sx=0, Sy=0, Sxx=0, Syy=0, Sxy=0;
+    for(let y=b.y0; y<=b.y1; y++){
+      let a=-1, e=-1; const row=y*w;
+      for(let x=b.x0; x<=b.x1; x++){ const q=row+x; if(hit[q] && label[q]===b.id){ if(a<0) a=x; e=x; } }
+      if(a<0) continue;
+      const cnt=e-a+1, sx=cnt*(a+e)/2, sxx=(e*(e+1)*(2*e+1) - (a-1)*a*(2*a-1))/6;
+      S0+=cnt; Sx+=sx; Sy+=cnt*y; Sxx+=sxx; Syy+=cnt*y*y; Sxy+=sx*y;
+    }
+    if(S0 <= 4) return null;
+    const mx=Sx/S0, my=Sy/S0;
+    const cxx=Sxx/S0-mx*mx+1/12, cyy=Syy/S0-my*my+1/12, cxy=Sxy/S0-mx*my;   // +1/12: spread inside each cell
+    const half=(cxx+cyy)/2, rad=Math.sqrt(((cxx-cyy)/2)**2 + cxy*cxy);
+    const lmin=Math.max(half-rad, 0), lmax=half+rad;
+    return {u:(mx+0.5)*s, v:(my+0.5)*s, d:4*Math.sqrt(lmin)*s,          // disc: variance = r²/4
+            round: lmax > 0 ? Math.sqrt(lmin/lmax) : 0, fill: b.cnt/S0};
+  };
+
+  // 5. Pick the target.
+  //    Ball mode: only round, solid blobs (rejects legs, arms and ragged floor patches).
+  //    Every mode: prefer the blob nearest to where last frame's prediction says the
+  //    target should be now. A different blob somewhere else only takes over if the
+  //    real target stays missing for several frames, so the lock can't flick to a leg.
+  const t = frameT ?? performance.now();
+  const model = $('model').value, wantRound = model === 'ball';
+  const minCells = +$('minpx').value / (s*s);
+  let cands = comps.filter(b => b.cnt >= minCells);
+  for(const b of cands){
+    b.edge = b.x0 <= 0 || b.y0 <= 0 || b.x1 >= w-1 || b.y1 >= h-1;
+    b.shape = shapeOf(b);
+    b.at = wantRound && b.shape ? [b.shape.u, b.shape.v] : [b.sx/b.cnt*s, b.sy/b.cnt*s];
+  }
+  // a ball scores ~0.9+ even with motion blur and seams; legs ≈ 0.3, floor patches ≈ 0.5
+  if(wantRound) cands = cands.filter(b => b.shape && b.shape.fill >= 0.75 && b.shape.round >= (b.edge ? 0.35 : 0.7));
+  let expect = null;
+  if(track && t - track.t < 400){
+    const p = track.at((t - track.t)/1000);
+    if(p) expect = {x:p[0], y:p[1], r: Math.max(track.d*3, W*0.12)};
+  }
+  // fresh pick: in ball mode the roundest, most solid blob wins; otherwise the biggest
+  const score = b => wantRound ? b.shape.round * b.shape.fill + b.cnt * 1e-6 : b.cnt;
+  const biggest = () => cands.reduce((m, b) => !m || score(b) > score(m) ? b : m, null);
+  let best = null, holding = false;
+  if(expect){
+    let bd = Infinity;
+    for(const b of cands){ const dd = Math.hypot(b.at[0]-expect.x, b.at[1]-expect.y); if(dd < expect.r && dd < bd){ bd = dd; best = b; } }
+    if(!best && cands.length){ if(++holdMiss < 6) holding = true; else best = biggest(); }
+  } else best = biggest();
+  if(best) holdMiss = 0;
+
+  if($('mask').checked){
+    // white = colour match, light grey = chosen target, dark grey = merged area / rejected blobs
+    for(let p=0,i=0;p<N;p++,i+=4){
+      const c = hit[p] ? (best && label[p]===best.id ? 255 : 150) : (best && label[p]===best.id) ? 110 : grown[p] ? 45 : 0;
+      d[i]=d[i+1]=d[i+2]=c;
+    }
+    wctx.putImageData(img,0,0); ctx.imageSmoothingEnabled=false; ctx.drawImage(work,0,0,W,H);
+  }
+  // show rejected candidates as thin red boxes, so you can see what was ignored
+  ctx.strokeStyle='rgba(255,90,79,.55)'; ctx.lineWidth=1.5;
+  for(const b of comps) if(b !== best && b.cnt >= minCells) ctx.strokeRect(b.x0*s, b.y0*s, (b.x1-b.x0+1)*s, (b.y1-b.y0+1)*s);
+
+  if(best){
+    const n = best.cnt, cx = (best.sx/n)*s, cy = (best.sy/n)*s, r = Math.sqrt(n/Math.PI)*s;
+    const bx0 = best.x0*s, by0 = best.y0*s, bw = (best.x1-best.x0+1)*s, bh = (best.y1-best.y0+1)*s;
+    const edge = best.edge;                                   // cut off by the frame
+    ctx.strokeStyle='rgba(60,255,143,.6)'; ctx.lineWidth=2; ctx.setLineDash([8,6]);
+    ctx.strokeRect(bx0, by0, bw, bh); ctx.setLineDash([]);
+
+    const ball = wantRound && best.shape;
+    const [u, v] = best.at;
+    // Start a fresh track after losing the target or a big jump, so old points can't drag the fit
+    if(!last || t - last.t > 200 || Math.hypot(u - last.x, v - last.y) > W*0.25){ trail = []; mapTrail = []; }
+    const dPx = ball ? best.shape.d : Math.min(bw, bh);
+    trail.push({x:u, y:v, t, d:dPx, edge}); if(trail.length > 240) trail.shift();
+    last = {x:u, y:v, t};
+
+    const c = calib(), ahead = +$('ahead').value/100;
+    const pr = predict({model, c, t, W, ahead, u, v});
+    track = {at: pr.at, t, d: dPx};
+    const p0 = pr.at(0) || [u, v], p5 = pr.at(0.05);
+    const pxV = p5 ? [(p5[0]-p0[0])/0.05, (p5[1]-p0[1])/0.05] : [0, 0];
+    const moving = Math.hypot(...pxV) > +$('minspd').value;
+
+    viewPred = null;
+    if(pr.atW && moving && $('pred').checked){
+      const path = [], ticks = [];
+      for(let i = 0; i <= 40; i++) path.push(pr.atW(ahead*i/40));
+      for(let k = 0.25; k < ahead; k += 0.25) ticks.push(pr.atW(k));
+      viewPred = {path, ticks, bounces: pr.bounces || []};
+    }
+    if(pr.nowW){ mapTrail.push(pr.nowW); if(mapTrail.length > 200) mapTrail.shift(); }
+
+    if($('pred').checked && moving) drawPrediction(pr, ahead, c);
+    if(pr.mode === 'ball') drawShadow(pr, c);
+    if($('trail').checked){
+      ctx.strokeStyle='rgba(255,176,32,.8)'; ctx.lineWidth=3; ctx.beginPath();
+      trail.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.stroke();
+    }
+    ctx.strokeStyle='#3cff8f'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(u,v,Math.max(ball ? dPx/2 : r, 8),0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(u-12,v); ctx.lineTo(u+12,v); ctx.moveTo(u,v-12); ctx.lineTo(u,v+12); ctx.stroke();
+    renderStats({pr, c, u, v, W, H, ahead, model, pxV, d: dPx, r, moving});
+    $('hud').textContent = `LOCK  x ${(u-W/2)|0}  y ${(H/2-v)|0}`;
+  } else if(holding){
+    // something else is visible but the real target vanished: wait before switching
+    $('hud').textContent = `HOLDING (ignoring a jump, ${holdMiss}/6)`;
+  } else {
+    clearStats();
+    $('hud').textContent='SEARCHING'; last=null; track=null;
+  }
+}
+
+// ---- Prediction ----------------------------------------------------------
+// Three engines, picked by the model and whether the camera is calibrated:
+//   ball   → 3D physics in feet (needs rulers + gap)
+//   floor  → cars on the floor, in feet (needs rulers + gap)
+//   screen → pixels only (always works)
+// Every engine returns at(τ) = predicted pixel τ seconds from now; the feet
+// engines also return atW(τ) = predicted world point.
+const G = 32.17;          // gravity, ft/s²
+const BOUNCE = 0.78;      // basketball: keeps ~78% of its vertical speed per bounce (≈ 61% of drop height)
+const SKID = 0.92;        // and loses a little sideways speed on each bounce
+
+function predict({model, c, t, W, ahead, u, v}){
+  const win = +$('win').value/1000;
+  const pts = trail.filter(p => t - p.t <= win*1000);
+  const T = p => (p.t - t)/1000;
+  let pr = null;
+  if(c && model === 'ball') pr = predictBall(c, pts, T, ahead);
+  else if(c && (model === 'turn' || model === 'line')) pr = predictFloor(c, pts, T, ahead, model);
+  return pr || predictScreen(pts, T, ahead, model === 'ball' ? 'accel' : model, u, v, !!c);
+}
+
+// Turn rate from a curve fit is noisy; only trust it when it is clearly there
+function turnRate(vx, vy, ax, ay, minSpeed, ahead){
+  const sp = Math.hypot(vx, vy); if(sp < minSpeed) return 0;
+  let w = (vx*ay - vy*ax) / (sp*sp);
+  const cap = Math.min(4, Math.PI / Math.max(ahead, 0.1));   // never predict more than half a circle
+  w = Math.max(-cap, Math.min(cap, w));
+  return Math.abs(w) < 0.1 ? 0 : w;
+}
+// constant speed + constant turn rate → an arc of a circle
+function arc(x0, y0, vx, vy, w, tau){
+  if(!w) return [x0 + vx*tau, y0 + vy*tau];
+  const th = Math.atan2(vy, vx), R = Math.hypot(vx, vy) / w;
+  return [x0 + R*(Math.sin(th + w*tau) - Math.sin(th)), y0 - R*(Math.cos(th + w*tau) - Math.cos(th))];
+}
+
+function predictScreen(pts, T, ahead, model, u, v, calibrated){
+  let x0 = u, y0 = v, vx = 0, vy = 0, ax = 0, ay = 0;
+  if(pts.length >= 4){
+    const Ts = pts.map(T), X = pts.map(p => p.x), Y = pts.map(p => p.y);
+    if(model === 'line' || pts.length < 8){ [x0, vx] = fit1(Ts, X); [y0, vy] = fit1(Ts, Y); }
+    else if(model === 'turn'){ let k; [x0, vx, k] = fit2(Ts, X); ax = 2*k; [y0, vy, k] = fit2(Ts, Y); ay = 2*k; }
+    else { // thrown ball on screen: gravity pulls down the image, so x stays a straight line and only y curves
+      [x0, vx] = fit1(Ts, X); let k; [y0, vy, k] = fit2(Ts, Y); ay = 2*k; }
+  }
+  if(model === 'turn'){
+    const w = turnRate(vx, vy, ax, ay, 20, ahead);
+    return {mode:'screen', omega:w, calibrated, at: tau => arc(x0, y0, vx, vy, w, tau)};
+  }
+  return {mode:'screen', omega:0, calibrated, at: tau => [x0 + vx*tau + 0.5*ax*tau*tau, y0 + vy*tau + 0.5*ay*tau*tau]};
+}
+
+function predictFloor(c, pts, T, ahead, model){
+  const m = pts.map(p => { const q = pxToPlane(c, p.x, p.y, 0); return q ? {tau:T(p), ...q} : null; }).filter(Boolean);
+  if(m.length < 3) return null;
+  const Ts = m.map(p => p.tau), X = m.map(p => p.x), F = m.map(p => p.f);
+  let x0, f0, vx, vf, ax = 0, af = 0;
+  if(model === 'line' || m.length < 8){ [x0, vx] = fit1(Ts, X); [f0, vf] = fit1(Ts, F); }
+  else { let k; [x0, vx, k] = fit2(Ts, X); ax = 2*k; [f0, vf, k] = fit2(Ts, F); af = 2*k; }
+  const w = model === 'line' ? 0 : turnRate(vx, vf, ax, af, 0.3, ahead);
+  const atW = tau => { const [x, f] = arc(x0, f0, vx, vf, w, tau); return {x, up:0, f}; };
+  // floor axes are mirrored vs screen axes, so flip the sign: positive = turning right
+  return {mode:'floor', omega:-w, atW, at: tau => worldToPx(c, atW(tau)), nowW:{x:x0, up:0, f:f0}, velW:{vx, vu:0, vf}};
+}
+
+// One frame's ball position in feet, two ways:
+//  air   – distance from apparent size (works anywhere)
+//  floor – if it's rolling, its centre is exactly R up, so cross that plane (more precise,
+//          but badly wrong if the ball is actually in the air, so only used once rolling is confirmed)
+function ballWorld(c, p, D){
+  if(p.edge || p.d < 4) return null;                    // cut off by the frame: size would be wrong
+  const zc = c.f * D / p.d, r = ray(c, p.x, p.y);
+  const air = camToWorld(c, [r[0]*zc, r[1]*zc, zc]);
+  return {air, floor: pxToPlane(c, p.x, p.y, D/2)};
+}
+
+function predictBall(c, pts, T, ahead){
+  const D = (+$('balld').value || 9.4) / 12, R = D/2;
+  const raw = pts.map(p => { const q = ballWorld(c, p, D); return q ? {tau:T(p), ...q} : null; }).filter(Boolean);
+  if(raw.length < 4) return null;
+  // Rolling = nearly every recent size-based height sits at ball-radius height
+  const rolling = raw.filter(p => p.air.up < R + 0.3).length >= 0.85*raw.length && raw.every(p => p.floor);
+  const m = raw.map(p => ({tau:p.tau, ...(rolling ? p.floor : p.air)}));
+  const Ts = m.map(p => p.tau);
+  // Sideways and forward: no force in the air, so straight lines
+  const [x0, vx] = fit1(Ts, m.map(p => p.x)), [f0, vf] = fit1(Ts, m.map(p => p.f));
+  let up0 = R, vu = 0;
+  if(!rolling){
+    // Height: only use points since the last bounce, and FIX gravity at 32.2 ft/s².
+    // up(τ) = up0 + vu·τ − ½gτ²  ⇔  up + ½gτ² = up0 + vu·τ  → a straight-line fit for up0 and vu
+    let k0 = 0;
+    for(let i = m.length-2; i > 0; i--){
+      if(m[i].up < R + 0.35 && m[i].up <= m[i-1].up && m[i].up <= m[i+1].up){ k0 = i; break; }
+    }
+    const seg = m.slice(k0);
+    if(seg.length >= 3) [up0, vu] = fit1(seg.map(p => p.tau), seg.map(p => p.up + 0.5*G*p.tau*p.tau));
+    else up0 = m[m.length-1].up;
+    if(up0 < R) up0 = R;
+  }
+  // Step the physics forward 1/240 s at a time (exact parabola within each step)
+  const dt = 1/240, steps = Math.ceil(Math.max(ahead, 0.1)/dt);
+  let x = x0, f = f0, up = up0, ux = vx, uf = vf, uu = vu, roll = rolling, landing = null;
+  const path = [{x, up, f}], bounces = [];
+  for(let i = 1; i <= steps; i++){
+    x += ux*dt; f += uf*dt;
+    if(!roll){
+      up += uu*dt - 0.5*G*dt*dt; uu -= G*dt;
+      if(up <= R && uu < 0){
+        if(!landing) landing = {tau: i*dt, x, f};
+        bounces.push({x, f});
+        up = R; uu = -uu*BOUNCE; ux *= SKID; uf *= SKID;
+        if(uu < 2){ uu = 0; roll = true; }                 // too weak to bounce again: rolls
+      }
+    }
+    path.push({x, up, f});
+  }
+  const atW = tau => path[Math.max(0, Math.min(path.length-1, Math.round(tau/dt)))];
+  return {mode:'ball', R, D, rolling, landing, bounces, atW, at: tau => worldToPx(c, atW(tau)),
+          nowW:{x:x0, up:up0, f:f0}, velW:{vx, vu: rolling ? 0 : vu, vf}};
+}
+
+function drawPrediction(pr, ahead, c){
+  ctx.save();
+  ctx.strokeStyle='#3aa0ff'; ctx.fillStyle='#3aa0ff'; ctx.lineWidth=4; ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.beginPath(); let pen = false;
+  for(let i = 0; i <= 60; i++){
+    const p = pr.at(ahead*i/60);
+    if(!p){ pen = false; continue; }
+    pen ? ctx.lineTo(...p) : ctx.moveTo(...p); pen = true;
+  }
+  ctx.stroke();
+  for(let k = 0.25; k < ahead; k += 0.25){ const p = pr.at(k); if(p){ ctx.beginPath(); ctx.arc(p[0], p[1], 4, 0, 7); ctx.fill(); } }
+  const e = pr.at(ahead);
+  if(e){
+    ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(e[0], e[1], 14, 0, 7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(e[0]-20, e[1]); ctx.lineTo(e[0]+20, e[1]); ctx.moveTo(e[0], e[1]-20); ctx.lineTo(e[0], e[1]+20); ctx.stroke();
+  }
+  // Bounce spots: a ball-sized ring drawn flat on the floor
+  if(pr.bounces && c){
+    ctx.lineWidth = 3;
+    for(const b of pr.bounces) floorRing(c, b.x, b.f, pr.R, '#3aa0ff');
+  }
+  ctx.restore();
+}
+function floorRing(c, x, f, rad, col){
+  ctx.strokeStyle = col; ctx.beginPath(); let pen = false;
+  for(let i = 0; i <= 32; i++){
+    const a = i/32*Math.PI*2, p = worldToPx(c, {x: x + rad*Math.cos(a), up: 0, f: f + rad*Math.sin(a)});
+    if(!p){ pen = false; continue; }
+    pen ? ctx.lineTo(...p) : ctx.moveTo(...p); pen = true;
+  }
+  ctx.stroke();
+}
+// The ball's shadow: a dotted line straight down to the floor, so height is easy to read
+function drawShadow(pr, c){
+  const b = worldToPx(c, pr.nowW), g = worldToPx(c, {...pr.nowW, up: 0});
+  if(!b || !g) return;
+  ctx.save(); ctx.strokeStyle = 'rgba(199,146,255,.8)'; ctx.lineWidth = 2; ctx.setLineDash([5,5]);
+  ctx.beginPath(); ctx.moveTo(...b); ctx.lineTo(...g); ctx.stroke(); ctx.setLineDash([]);
+  floorRing(c, pr.nowW.x, pr.nowW.f, pr.R*0.8, 'rgba(199,146,255,.8)');
+  ctx.restore();
+}
+
+// ---- Live numbers (left column) ----------------------------------------
+const txt = (id, v) => { $(id).textContent = v; };
+const deg = rad => Math.round(rad*180/Math.PI);
+const side = v => `${Math.abs(v).toFixed(2)} ft ${v < 0 ? 'left' : 'right'}`;
+function renderStats({pr, c, u, v, W, H, ahead, model, pxV, d, r, moving}){
+  txt('st','LOCKED'); $('st').className = 'v lock';
+  const e = pr.at(ahead);
+  txt('pos', `${(u-W/2)|0}, ${(H/2-v)|0} px from centre`);
+  txt('vel', `${pxV[0]|0}, ${-pxV[1]|0} px/s`);
+  txt('size', `${Math.round(d)} px wide`);
+  txt('pred-out', e ? `${(e[0]-W/2)|0}, ${(H/2-e[1])|0} px` : '–');
+  const turnTxt = w => model === 'line' ? 'straight-line model'
+    : `turning ${Math.round(Math.abs(w)*180/Math.PI)}°/s ${Math.abs(w) < 0.05 ? '(straight)' : w < 0 ? 'left' : 'right'}`;
+
+  if(pr.mode === 'screen'){
+    const lat = floorPosLateral(u, v, W);
+    $('units').className = lat ? 'units on' : 'units';
+    txt('units', model === 'ball' || model === 'turn' || model === 'line'
+      ? (rulers.far && rulers.near ? 'Units: pixels · enter the ruler gap for 3D feet' : 'Units: pixels · mark both rulers + gap for feet')
+      : 'Units: pixels (on-screen parabola)');
+    const sp = Math.hypot(...pxV);
+    txt('spd', `${sp|0} px/s`); txt('spdsub', 'calibrate for ft/s and mph');
+    txt('rpos', lat ? side(lat.x) : `${(u-W/2)|0}, ${(H/2-v)|0} px`);
+    txt('rdist', '–'); txt('rdistsub', 'needs rulers + gap');
+    txt('rheight', '–'); txt('rland', 'needs rulers + gap');
+    txt('rvel', `${pxV[0]|0} · ${-pxV[1]|0} px/s`);
+    txt('heading', sp > 5 ? `${deg(Math.atan2(pxV[0], -pxV[1]))}° on screen` : '–');
+    txt('turnrate', turnTxt(pr.omega));
+    txt('rpred', e ? `${(e[0]-W/2)|0}, ${(H/2-e[1])|0} px` : '–');
+    txt('rsize', lat ? `${(d / lat.s * 12).toFixed(1)} in` : `${Math.round(d)} px`);
+    return;
+  }
+
+  const {x, up, f} = pr.nowW, {vx, vu, vf} = pr.velW;
+  const sp = Math.hypot(vx, vu, vf), ball = pr.mode === 'ball';
+  $('units').className = 'units on';
+  txt('units', ball ? 'Units: feet · 3D ball physics' : 'Units: feet · on the floor');
+  txt('spd', `${sp.toFixed(1)} ft/s`);
+  txt('spdsub', `${(sp*0.6818).toFixed(2)} mph · ${(sp*12).toFixed(0)} in/s`);
+  txt('rpos', `${side(x)} · ${f.toFixed(2)} ft out`);
+  txt('rdist', `${Math.hypot(x, up - c.h, f).toFixed(2)} ft`); txt('rdistsub', 'straight line from the camera');
+  txt('rvel', `${vx.toFixed(1)} · ${vf.toFixed(1)} · ${vu.toFixed(1)} ft/s`);
+  txt('heading', Math.hypot(vx, vf) > 0.2 ? `${deg(Math.atan2(vx, vf))}° (0° = away)` : '–');
+  txt('turnrate', ball ? (pr.rolling ? 'rolling on the floor' : vu > 0 ? `rising ${vu.toFixed(1)} ft/s` : `falling ${(-vu).toFixed(1)} ft/s`) : turnTxt(pr.omega));
+  if(ball){
+    txt('rheight', `${up.toFixed(2)} ft up`);
+    txt('rland', pr.rolling ? 'rolling' : pr.landing
+      ? `lands in ${pr.landing.tau.toFixed(2)} s at ${side(pr.landing.x)}, ${pr.landing.f.toFixed(1)} ft out`
+      : 'no landing within the prediction time');
+  } else { txt('rheight', 'on the floor'); txt('rland', ' '); }
+  const q = pr.atW(ahead);
+  txt('rpred', `${q.x.toFixed(2)} · ${q.f.toFixed(2)} ft` + (ball ? ` · ${q.up.toFixed(1)} up` : ''));
+  // measured size: pixels × camera depth ÷ focal length (in the air this just echoes your ball setting)
+  const zc = c.cos*f - c.sin*(up - c.h);
+  txt('rsize', `${(d * zc / c.f * 12).toFixed(1)} in wide`);
+  ctx.font = '600 22px "JetBrains Mono", monospace'; ctx.fillStyle = '#c792ff';
+  const lp = worldToPx(c, pr.nowW) || [u, v];
+  ctx.fillText(ball ? `${up.toFixed(1)} ft up` : `${Math.hypot(x, f).toFixed(1)} ft`, lp[0] + d/2 + 12, lp[1] - 10);
+}
+function clearStats(){
+  viewPred = null;
+  txt('st','searching'); $('st').className = 'v nolock';
+  for(const id of ['spd','rpos','rdist','rvel','heading','rpred','rsize','rheight']) txt(id, '–');
+  for(const id of ['spdsub','pos','vel','turnrate','pred-out','size','rland']) txt(id, ' ');
+}
+
+// Least-squares straight line x = a + bτ → [a, b]
+function fit1(T,X){
+  const n=T.length; let st=0,sx=0,stt=0,stx=0;
+  for(let i=0;i<n;i++){ st+=T[i]; sx+=X[i]; stt+=T[i]*T[i]; stx+=T[i]*X[i]; }
+  const d = n*stt - st*st; if(!d) return [X[n-1],0];
+  const b = (n*stx - st*sx)/d; return [(sx - b*st)/n, b];
+}
+// Least-squares parabola x = a + bτ + cτ² → [a, b, c] (solves the 3×3 normal equations)
+function fit2(T,X){
+  let s0=0,s1=0,s2=0,s3=0,s4=0,y0=0,y1=0,y2=0;
+  for(let i=0;i<T.length;i++){ const t=T[i], t2=t*t, x=X[i]; s0++; s1+=t; s2+=t2; s3+=t2*t; s4+=t2*t2; y0+=x; y1+=t*x; y2+=t2*x; }
+  const M=[[s0,s1,s2],[s1,s2,s3],[s2,s3,s4]], Y=[y0,y1,y2];
+  const det = m => m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1]) - m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0]) + m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]);
+  const D = det(M); if(Math.abs(D) < 1e-12) return [...fit1(T,X), 0];
+  return [0,1,2].map(j => det(M.map((r,i) => r.map((v,k) => k===j ? Y[i] : v))) / D);
+}
+function drawCross(W,H){
+  ctx.strokeStyle='rgba(255,255,255,.35)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(W/2-20,H/2); ctx.lineTo(W/2+20,H/2); ctx.moveTo(W/2,H/2-20); ctx.lineTo(W/2,H/2+20); ctx.stroke();
+}
+navigator.mediaDevices?.addEventListener?.('devicechange', listCams);
+</script>
+</body>
+</html>
