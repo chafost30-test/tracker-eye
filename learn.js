@@ -100,7 +100,8 @@ const Learn = (() => {
     async open(){ if(this.db) return this.db; this.db = await new Promise((ok, bad) => { const r = indexedDB.open('tracker-eye', 1); r.onupgradeneeded = () => r.result.createObjectStore('examples', {keyPath: 'id'}); r.onsuccess = () => ok(r.result); r.onerror = bad; }); return this.db; },
     async all(){ try{ const db = await this.open(); return await new Promise(ok => { const r = db.transaction('examples').objectStore('examples').getAll(); r.onsuccess = () => ok(r.result); r.onerror = () => ok([]); }); } catch(e){ return []; } },
     async put(x){ try{ const db = await this.open(); db.transaction('examples', 'readwrite').objectStore('examples').put(x); } catch(e){} },
-    async clear(){ try{ const db = await this.open(); db.transaction('examples', 'readwrite').objectStore('examples').clear(); } catch(e){} }
+    async clear(){ try{ const db = await this.open(); db.transaction('examples', 'readwrite').objectStore('examples').clear(); } catch(e){} },
+    async del(id){ try{ const db = await this.open(); db.transaction('examples', 'readwrite').objectStore('examples').delete(id); } catch(e){} }
   };
   function normLabel(name){
     const n = String(name).toLowerCase();
@@ -111,22 +112,58 @@ const Learn = (() => {
   }
   // Every 5th example of each label goes to the TEST set, which is never used to decide
   // locks, only to measure how good the verifier is.
-  function addExample(canvas, label, source, save = true){
+  // Each action (a folder, an Inbox batch, one live label) is a "batch", so Undo removes the whole action
+  let batchSeq = 0;
+  const newBatch = () => `${Date.now()}-${++batchSeq}`;
+  function addExample(canvas, label, source, save = true, batch = newBatch()){
     const n = S.lib.filter(e => e.label === label).length;
-    const e = {id: uid(), label, source, split: n % 5 === 4 ? 'test' : 'train', canvas, fp: fingerprint(canvas), added: Date.now()};
+    const e = {id: uid(), label, source, split: n % 5 === 4 ? 'test' : 'train', canvas, fp: fingerprint(canvas), added: Date.now(), batch};
     S.lib.push(e); S.libVersion++; S.cache.clear();
-    if(save) DB.put({id: e.id, label, source, split: e.split, img: toDataURL(canvas), added: e.added});
+    if(save) DB.put({id: e.id, label, source, split: e.split, img: toDataURL(canvas), added: e.added, batch});
     return e;
+  }
+  function removeExamples(ids){
+    const set = new Set(ids); S.lib = S.lib.filter(e => !set.has(e.id)); for(const id of ids) DB.del(id);
+    S.libVersion++; S.cache.clear(); uiLibrary();
+  }
+  function undoLast(){
+    if(!S.lib.length) return flash('The library is empty.');
+    const lastE = S.lib.reduce((m, e) => !m || e.added > m.added || (e.added === m.added && e.batch > m.batch) ? e : m, null);
+    const ids = S.lib.filter(e => e.batch === lastE.batch).map(e => e.id);
+    removeExamples(ids); if(!q('libModal').hidden) renderLibrary();
+    flash(`Undone: removed the last ${ids.length} example${ids.length === 1 ? '' : 's'} added (${lastE.source}).`);
+  }
+  function relabel(e, label){
+    e.label = label; S.libVersion++; S.cache.clear();
+    DB.put({id: e.id, label, source: e.source, split: e.split, img: toDataURL(e.canvas), added: e.added, batch: e.batch}); uiLibrary();
+  }
+  function openLibrary(){ q('libModal').hidden = false; renderLibrary(); }
+  function renderLibrary(){
+    const box = q('libCards'), want = q('libFilter').value; box.innerHTML = '';
+    const list = S.lib.filter(e => want === 'all' || e.label === want).sort((a, b) => b.added - a.added);
+    if(!list.length) box.innerHTML = '<p class="hint" style="padding:20px">No examples here yet.</p>';
+    for(const e of list.slice(0, 400)){
+      const card = document.createElement('div'); card.className = 'icard on';
+      const img = document.createElement('img'); img.src = e.canvas.toDataURL('image/jpeg', 0.7); img.alt = '';
+      const sel = document.createElement('select');
+      for(const [v, t] of Object.entries(LABELS)){ const o = document.createElement('option'); o.value = v; o.textContent = t; if(v === e.label) o.selected = true; sel.appendChild(o); }
+      sel.onchange = () => relabel(e, sel.value);
+      const del = document.createElement('button'); del.textContent = 'Remove';
+      del.onclick = () => { removeExamples([e.id]); card.remove(); q('libSummary').textContent = `${S.lib.length} examples`; };
+      const why = document.createElement('div'); why.className = 'why'; why.textContent = `${e.source}${e.split === 'test' ? ' · test set' : ''} · ${new Date(e.added).toLocaleDateString()}`;
+      card.append(img, sel, del, why); box.appendChild(card);
+    }
+    q('libSummary').textContent = `${S.lib.length} examples${list.length > 400 ? ' (newest 400 shown)' : ''}`;
   }
   async function loadLibrary(){
     for(const r of await DB.all()){
       try{ const im = await imgFrom(r.img); const c = document.createElement('canvas'); c.width = c.height = 128; c.getContext('2d').drawImage(im, 0, 0, 128, 128);
-        S.lib.push({id: r.id, label: r.label, source: r.source, split: r.split, canvas: c, fp: fingerprint(c), added: r.added}); } catch(e){}
+        S.lib.push({id: r.id, label: r.label, source: r.source, split: r.split, canvas: c, fp: fingerprint(c), added: r.added, batch: r.batch || r.id}); } catch(e){}
     }
     S.libVersion = S.lib.length; uiLibrary();
   }
   async function importFolder(files){
-    let added = 0;
+    let added = 0; const batch = newBatch();
     for(const f of files){
       if(!/^image\//.test(f.type) && !/\.(jpe?g|png|webp|heic|gif|bmp)$/i.test(f.name)) continue;
       const parts = (f.webkitRelativePath || f.name).split('/'); if(parts.length < 2) continue;
@@ -134,7 +171,7 @@ const Learn = (() => {
       try{
         const url = URL.createObjectURL(f), im = await imgFrom(url); URL.revokeObjectURL(url);
         const side = Math.min(im.naturalWidth, im.naturalHeight);
-        addExample(crop(im, im.naturalWidth/2, im.naturalHeight/2, side), label, 'folder'); added++;
+        addExample(crop(im, im.naturalWidth/2, im.naturalHeight/2, side), label, 'folder', true, batch); added++;
       } catch(e){}
     }
     uiLibrary(); flash(`Added ${added} photo${added === 1 ? '' : 's'} from the folder.`);
@@ -209,24 +246,36 @@ const Learn = (() => {
     S.testAcc = {right, n: test.length, pct: Math.round(100*right/test.length), libVersion: S.libVersion};
     uiLibrary();
   }
-  // Colour profile learned from the examples (centre of each crop, colourful pixels only)
+  // Colour profile learned from the examples. Learns the hue from the target examples,
+  // then sets the saturation cut-off BETWEEN the target and the not-target examples
+  // (e.g. above a wood floor that has almost the same hue as a basketball).
   function useLibraryColours(){
     const ex = S.lib.filter(e => e.label === active()); if(!ex.length) return flash('No examples for this target yet.');
-    const hs = [];
-    for(const e of ex){
-      const d = e.canvas.getContext('2d').getImageData(32, 32, 64, 64).data;
-      for(let i = 0; i < d.length; i += 16){ const h = rgbToHsv(d[i], d[i+1], d[i+2]); if(h[1] >= 0.3 && h[2] >= 0.25 && h[2] <= 0.97) hs.push(h); }
-    }
+    const pixels = (list, region) => { const out = []; for(const e of list){ const [x, y, w] = region; const d = e.canvas.getContext('2d').getImageData(x, y, w, w).data;
+      for(let i = 0; i < d.length; i += 16){ const h = rgbToHsv(d[i], d[i+1], d[i+2]); if(h[2] >= 0.12) out.push(h); } } return out; };
+    const hs = pixels(ex, [32, 32, 64]).filter(h => h[1] >= 0.3 && h[2] >= 0.25 && h[2] <= 0.97);
     if(hs.length < 30) return flash('The examples are too dark or grey to learn a colour from.');
     let cx = 0, cy = 0; for(const h of hs){ cx += Math.cos(h[0]*Math.PI/180); cy += Math.sin(h[0]*Math.PI/180); }
     const mh = (Math.atan2(cy, cx)*180/Math.PI + 360) % 360;
-    const dev = hs.map(h => { let d = Math.abs(h[0] - mh); return d > 180 ? 360 - d : d; });
+    const hueDev = h => { let d = Math.abs(h[0] - mh); return d > 180 ? 360 - d : d; };
+    const tol = Math.round(Math.min(40, Math.max(10, pct(hs.map(hueDev), 0.9) * 1.3)));
     const sat = median(hs.map(h => h[1])), val = median(hs.map(h => h[2]));
+    // saturation of not-target pixels that share the target's hue
+    const ns = pixels(S.lib.filter(e => e.label !== active()), [0, 0, 128]).filter(h => hueDev(h) < tol).map(h => h[1]);
+    // Aim to keep 90% of the target's pixels, but rise above DULLER look-alikes (like a wood floor).
+    // Same-colour look-alikes can't be fixed by colour: that's the library double-check's job.
+    // Never cut away more than 30% of the target's own pixels.
+    const ts = hs.map(h => h[1]);
+    let cut = pct(ts, 0.1), note = '';
+    const duller = ns.filter(x => x < sat);
+    if(duller.length > 50) cut = Math.min(Math.max(cut, pct(duller, 0.95) + 0.03), pct(ts, 0.3));
+    if(ns.filter(x => x >= sat).length > 50) note = ' Some not-target examples are the same colour as the target, so keep the library double-check on.';
     const rgb = hsvToRgb(mh, sat, val);
     samples = [{hsv: [mh, sat, val], rgb: `rgb(${rgb.join(',')})`}];
-    q('tol').value = Math.round(Math.min(40, Math.max(10, pct(dev, 0.9) * 1.3))); q('tol').dispatchEvent(new Event('input'));
+    q('tol').value = tol; q('tol').dispatchEvent(new Event('input'));
+    q('strict').value = Math.round(Math.max(20, Math.min(95, 100*cut/sat))); q('strict').dispatchEvent(new Event('input'));
     renderSwatches(); trail = []; last = null; track = null;
-    flash(`Colour learned from ${ex.length} examples: hue ${mh.toFixed(0)}°, tolerance ${q('tol').value}.`);
+    flash(`Colour learned from ${ex.length} examples: hue ${mh.toFixed(0)}°, tolerance ${tol}, strictness ${q('strict').value}%.${note}`);
   }
   function hsvToRgb(h, s, v){ const f = n => { const k = (n + h/60) % 6; return Math.round(255*(v - v*s*Math.max(0, Math.min(k, 4 - k, 1)))); }; return [f(5), f(3), f(1)]; }
 
@@ -259,8 +308,8 @@ const Learn = (() => {
     q('inboxSummary').textContent = `${S.inbox.length} suggestion${S.inbox.length === 1 ? '' : 's'} · ${S.inbox.filter(i => i.checked).length} ticked`;
   }
   function acceptInbox(){
-    let n = 0;
-    for(const it of S.inbox) if(it.checked && it.label !== 'skip'){ addExample(it.canvas, it.label, 'inbox'); n++; }
+    let n = 0; const batch = newBatch();
+    for(const it of S.inbox) if(it.checked && it.label !== 'skip'){ addExample(it.canvas, it.label, 'inbox', true, batch); n++; }
     S.inbox = []; renderInbox(); uiInboxCount(); uiLibrary();
     flash(`Added ${n} example${n === 1 ? '' : 's'} to the library.`);
   }
@@ -292,6 +341,7 @@ const Learn = (() => {
   }
   function startRecording(){
     if(S.rec) return;
+    S.prevLocked = false;
     const r = S.rec = {name: q('runName').value, startPerf: performance.now(), startDate: new Date(), frames: [], events: [], failures: [],
       pending: [], errors: [], errUnit: null, vChecked: 0, vPassed: 0, chunks: [], media: null, mime: '', locked: 0, holding: 0, total: 0, fpsT: [],
       switches: 0, lost: 0, spikes: 0, replay: S.replay, libVersion: S.libVersion, aiKind: S.ai.kind};
@@ -489,8 +539,14 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
     S.replay = true; S.replayBase = performance.now();
     vid.srcObject = null; vid.src = URL.createObjectURL(file); vid.loop = false;
     q('msg').hidden = true; q('hud').hidden = false;
-    vid.onended = async () => { if(S.rec) await stopRecording(); S.replay = false; flash('Replay finished. Click "Make report".'); };
-    vid.play().then(() => { trail = []; last = null; track = null; startRecording(); nextFrame(); });
+    const fail = () => {
+      vid.onerror = null; vid.onended = null; S.replay = false; vid.removeAttribute('src');
+      q('msg').hidden = false; q('msg').textContent = 'That file could not be played here. Use a video saved by the tracker (.webm), or an .mp4. iPhone .MOV files play in Safari but often not in Chrome.';
+      flash('That video could not be played.');
+    };
+    vid.onerror = fail;
+    vid.onended = async () => { vid.onerror = null; if(S.rec) await stopRecording(); S.replay = false; flash('Replay finished. Click "Make report".'); };
+    vid.play().then(() => { trail = []; last = null; track = null; startRecording(); nextFrame(); }).catch(fail);
   }
 
   // ------------------------------------------------------------ saved setup
@@ -530,11 +586,11 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
   }
   function uiScore(s){
     const u = s.predError.unit || '';
-    q('recCounts').innerHTML = `<b>Last run:</b> locked ${s.lockedPct}% · switches ${s.lockSwitches} · lost ${s.lost} · spikes ${s.speedSpikes} · miss ${s.predError.median ?? '—'} ${u} typical`;
+    q('recCounts').innerHTML = `<b>Last run:</b> locked ${s.lockedPct}% · switches ${s.lockSwitches} · lost ${s.lost} · spikes ${s.speedSpikes} · miss ${s.predError.median == null ? '—' : `${s.predError.median} ${u}`} typical`;
   }
   function setFrozen(on){
     S.frozen = on;
-    for(const id of ['labelMode', 'inboxBtn', 'importBtn', 'clearLib', 'acceptInbox']) if(q(id)) q(id).disabled = on;
+    for(const id of ['labelMode', 'inboxBtn', 'importBtn', 'clearLib', 'acceptInbox', 'undoLib', 'undoLib2']) if(q(id)) q(id).disabled = on;
     flash(on ? 'Demo mode: learning is frozen and locks need the library double-check.' : 'Demo mode off: learning is back on.');
   }
   function applyPreset(){
@@ -559,6 +615,11 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
     q('preset').onchange = applyPreset;
     q('vstrict').oninput = e => { q('vstrictv').textContent = e.target.value; S.cache.clear(); };
     q('inboxBtn').onclick = openInbox;
+    q('viewLib').onclick = openLibrary;
+    q('undoLib').onclick = undoLast;
+    q('undoLib2').onclick = undoLast;
+    q('libFilter').onchange = renderLibrary;
+    q('closeLib').onclick = () => q('libModal').hidden = true;
     q('closeInbox').onclick = () => q('inboxModal').hidden = true;
     q('acceptInbox').onclick = acceptInbox;
     q('clearInbox').onclick = () => { S.inbox = []; renderInbox(); uiInboxCount(); };
@@ -578,7 +639,7 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
       const k = e.key.toLowerCase();
       if(k === 'b') labelCurrent('ball'); else if(k === 'c') labelCurrent('rc-car'); else if(k === 'n') labelCurrent('not-target');
       else if(k === 'w') flagWrong(); else if(k === 'r') q('recBtn').click(); else if(k === 'i') openInbox();
-      else if(k === 'escape') q('inboxModal').hidden = true;
+      else if(k === 'escape'){ q('inboxModal').hidden = true; q('libModal').hidden = true; }
     });
     restoreSetup();
     setInterval(saveSetup, 2000); addEventListener('beforeunload', saveSetup);
@@ -596,5 +657,5 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
 
   return {init, check, onFrame, afterDraw, labelClick, isReplay: () => S.replay, replayClock: mt => S.replayBase + mt*1000, setSnap: c => { S.snap = c; },
           // exposed for testing
-          _S: S, addExample, judge, testVerifier, startRecording, stopRecording, makeReport, summarize, suggest, acceptInbox, ready, fingerprint};
+          _S: S, addExample, undoLast, removeExamples, judge, testVerifier, startRecording, stopRecording, makeReport, summarize, suggest, acceptInbox, ready, fingerprint};
 })();
