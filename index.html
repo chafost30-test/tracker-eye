@@ -66,6 +66,28 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .chk input{width:auto;margin:0}
 .hint{font-size:11px;color:var(--dim);margin:0}
 
+/* Tabs, Inbox, toast */
+.tabs{grid-column:1/-1;display:flex;gap:6px;border-bottom:1px solid var(--line);padding-bottom:8px}
+.tabs button{width:auto;flex:1;font-weight:600}
+.tabs button.on{border-color:var(--aim);color:var(--aim)}
+.libcounts{display:flex;gap:10px;flex-wrap:wrap;font-size:12px}
+.libcounts b{font:700 16px var(--head);color:var(--fg)} .libcounts i{color:var(--dim);font-style:normal}
+button:disabled{opacity:.45;cursor:not-allowed}
+.rec-dot{color:var(--warn);font-weight:700;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.rec-dot{animation:none}}
+.toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--panel);border:1px solid var(--aim);color:var(--fg);padding:10px 16px;border-radius:6px;z-index:30;max-width:min(560px,90vw);font-size:13px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:20;display:flex;align-items:center;justify-content:center;padding:24px}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:min(1100px,100%);max-height:100%;display:flex;flex-direction:column}
+.sheet header,.sheet footer{display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);margin:0}
+.sheet footer{border-top:1px solid var(--line);border-bottom:0}
+.sheet header h2{margin:0;flex:1} .sheet footer button{width:auto}
+.cards{overflow:auto;padding:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.icard{border:1px solid var(--line);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px;opacity:.6}
+.icard.on{opacity:1;border-color:var(--lock)}
+.icard img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:4px}
+.icard .why{font-size:11px;color:var(--dim)}
+
 /* Narrower screens: allow scrolling and stack */
 @media (max-width:1300px){
   body{overflow:auto;height:auto}
@@ -78,12 +100,13 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 <header>
   <h1>Tracker Eye</h1>
   <p class="sub">Lock on by colour, predict where it goes, measure it in real feet.</p>
+  <span class="rec-dot" id="recDot" hidden>● REC</span>
   <span class="units" id="units">Units: pixels (mark both rulers for feet)</span>
 </header>
 <div class="wrap">
   <aside class="panel live" aria-label="Live numbers">
     <h2>Live numbers</h2>
-    <div class="stat"><div class="k">Status</div><div class="v nolock" id="st">no target</div></div>
+    <div class="stat"><div class="k">Status</div><div class="v nolock" id="st">no target</div><div class="s" id="stsub">&nbsp;</div></div>
     <div class="stat"><div class="k">Speed</div><div class="v" id="spd">–</div><div class="s" id="spdsub">&nbsp;</div></div>
     <div class="stat"><div class="k">Position</div><div class="v real sm" id="rpos">–</div><div class="s" id="pos">&nbsp;</div></div>
     <div class="stat"><div class="k">Distance from camera</div><div class="v real sm" id="rdist">–</div><div class="s" id="rdistsub">needs ruler gap</div></div>
@@ -104,7 +127,12 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
   </main>
 
   <aside class="panel controls" aria-label="Controls">
-    <section>
+    <div class="tabs" role="tablist">
+      <button data-tab="track" class="on">Tracking</button>
+      <button data-tab="learn">Learn</button>
+      <button data-tab="rec">Record &amp; report</button>
+    </div>
+    <section data-pane="track">
       <h2>Camera</h2>
       <select id="cam" aria-label="Camera device"><option value="">— start camera first —</option></select>
       <div class="row"><button id="start">Start camera</button><button id="stop">Stop</button></div>
@@ -126,7 +154,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
       <label class="chk"><input type="checkbox" id="mirror"> Mirror view</label>
     </section>
 
-    <section>
+    <section data-pane="track">
       <h2>Prediction</h2>
       <label class="chk"><input type="checkbox" id="pred" checked> Show blue prediction line</label>
       <select id="model" aria-label="Motion model">
@@ -156,16 +184,86 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
       <div class="row"><button id="wAdd">Mark wall</button><button id="wClear">Clear walls</button></div>
       <p class="hint" id="calStatus">No rulers marked.</p>
     </section>
+
+    <section data-pane="learn" hidden>
+      <h2>What to track</h2>
+      <select id="preset" aria-label="Target">
+        <option value="ball" selected>Ball (3D physics, must be round)</option>
+        <option value="rc-car">RC Car (floor turning)</option>
+      </select>
+      <h2 style="margin-top:8px">Example library</h2>
+      <div class="libcounts" id="libCounts"></div>
+      <p class="hint">Folder layout: one folder per label, e.g. <b>ball/</b>, <b>rc-car/</b>, <b>not-target/</b>. Close-up photos work best.</p>
+      <div class="row"><button id="importBtn">Load folder…</button><button id="exportLib">Export library</button></div>
+      <input type="file" id="folderIn" webkitdirectory directory multiple hidden>
+      <button id="clearLib">Clear library</button>
+      <h2 style="margin-top:8px">Label from the live feed</h2>
+      <label for="labelMode">Clicking a blob in the video…</label>
+      <select id="labelMode">
+        <option value="off" selected>picks its colour (normal)</option>
+        <option value="ball">saves it as Ball</option>
+        <option value="rc-car">saves it as RC Car</option>
+        <option value="not-target">saves it as Not target</option>
+      </select>
+      <p class="hint">Keys: <b>B</b> ball · <b>C</b> car · <b>N</b> not target (current lock) · <b>W</b> wrong lock · <b>I</b> inbox · <b>R</b> record</p>
+      <button id="inboxBtn">Review Inbox (0)</button>
+    </section>
+
+    <section data-pane="learn" hidden>
+      <h2>Double-check</h2>
+      <label class="chk"><input type="checkbox" id="verifyOn" checked> Check locks against the library</label>
+      <p class="hint" id="aiStatus">Fingerprint: loading…</p>
+      <p class="hint" id="verifyState"></p>
+      <label for="vstrict">Library strictness <span id="vstrictv">40</span></label>
+      <input type="range" id="vstrict" min="0" max="100" value="40">
+      <button id="testVerifier">Test the verifier</button>
+      <p class="hint" id="testAcc"></p>
+      <button id="useColours">Learn colour from the library</button>
+      <p class="hint">Learning only adds or removes examples, so any change can be undone.</p>
+    </section>
+
+    <section data-pane="rec" hidden>
+      <h2>Test run</h2>
+      <label for="runName">Which test is this?</label>
+      <select id="runName"></select>
+      <label class="chk"><input type="checkbox" id="recVideo" checked> Save the camera video in the report</label>
+      <button id="recBtn">● Record a test run</button>
+      <button id="flagBtn">Flag this moment as wrong (W)</button>
+      <button id="reportBtn" disabled>Make report</button>
+      <p class="hint" id="recCounts">The report is one zip: scoreboard, the 10 worst moments as filmstrips, the log, settings and video. Attach it in the chat.</p>
+    </section>
+
+    <section data-pane="rec" hidden>
+      <h2>Replay</h2>
+      <p class="hint">Run a saved video through the tracker again, to compare versions on exactly the same footage.</p>
+      <button id="replayBtn">Replay a video file…</button>
+      <input type="file" id="replayIn" accept="video/*" hidden>
+      <h2 style="margin-top:8px">Demo day</h2>
+      <label class="chk"><input type="checkbox" id="demoMode"> Demo mode (frozen: no learning)</label>
+      <p class="hint">Use a version you have tested. CONFIRMED only shows when colour, shape and the library all agree.</p>
+    </section>
   </aside>
 </div>
 
+<div class="modal" id="inboxModal" hidden>
+  <div class="sheet" role="dialog" aria-label="Inbox">
+    <header><h2>Inbox: labels the app suggested</h2><span class="hint" id="inboxSummary"></span><button id="closeInbox">Close</button></header>
+    <div class="cards" id="inboxCards"></div>
+    <footer><button id="tickAll">Tick / untick all</button><button id="clearInbox">Clear inbox</button><span style="flex:1"></span><button id="acceptInbox">Add ticked to the library</button></footer>
+  </div>
+</div>
+<div class="toast" id="learnMsg" hidden></div>
+
 <!-- Safari stops updating a display:none video, so keep it "visible" but off-screen -->
 <video id="vid" playsinline muted autoplay style="position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0"></video>
+<script src="learn.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const vid = $('vid'), cv = $('view'), ctx = cv.getContext('2d', {willReadFrequently:true});
 const work = document.createElement('canvas'), wctx = work.getContext('2d', {willReadFrequently:true});
-let stream = null, samples = [], trail = [], last = null, track = null, holdMiss = 0, frames = 0, fpsT = performance.now();
+// clean copy of each frame (before any overlays) for the library check and labelling
+const snap = document.createElement('canvas'), sctx = snap.getContext('2d', {willReadFrequently:true});
+let stream = null, samples = [], trail = [], last = null, track = null, holdMiss = 0, trackId = 0, trackStart = 0, frames = 0, fpsT = performance.now();
 
 function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;
   if(d){h=mx===r?((g-b)/d)%6:mx===g?(b-r)/d+2:(r-g)/d+4;h*=60;if(h<0)h+=360}
@@ -179,7 +277,7 @@ async function listCams(){
 }
 
 async function start(deviceId){
-  stop();
+  stop(); vid.removeAttribute('src');
   $('msg').hidden = false; $('msg').textContent = 'Starting camera…';
   const video = {width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60}};
   if(deviceId) video.deviceId = {exact:deviceId};
@@ -216,6 +314,7 @@ cv.addEventListener('click', ev => {
   const ox = (r.width - cv.width*scale)/2, oy = (r.height - cv.height*scale)/2;
   const x = Math.round((ev.clientX - r.left - ox)/scale), y = Math.round((ev.clientY - r.top - oy)/scale);
   if(rulerPick){ rulerClick(x, y); return; }   // in ruler mode, clicks mark ruler ends
+  if(Learn.labelClick(x, y)) return;            // in label mode, clicks save examples
   const d = ctx.getImageData(Math.max(0,x-10), Math.max(0,y-10), 21, 21).data;
   const good = [];
   for(let i=0;i<d.length;i+=4){ const q = rgbToHsv(d[i],d[i+1],d[i+2]); if(q[1] >= 0.3 && q[2] >= 0.25 && q[2] <= 0.97) good.push([q, d[i], d[i+1], d[i+2]]); }
@@ -462,17 +561,19 @@ $('minspd').oninput = e => $('minspdv').textContent = e.target.value;
 const hasVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
 function nextFrame(){ hasVFC ? vid.requestVideoFrameCallback(loop) : requestAnimationFrame(() => loop()); }
 function loop(_now, meta){
-  if(!stream) return;
-  const frameT = meta ? (meta.captureTime || meta.expectedDisplayTime || performance.now()) : performance.now();
+  if(!stream && !Learn.isReplay()) return;
+  // live camera: when the camera took the frame · replay: the video's own clock (immune to playback stutter)
+  const frameT = meta ? (Learn.isReplay() ? Learn.replayClock(meta.mediaTime) : (meta.captureTime || meta.expectedDisplayTime || performance.now())) : performance.now();
   if(vid.readyState >= 2){
     const W = vid.videoWidth, H = vid.videoHeight;
     if(cv.width!==W){cv.width=W;cv.height=H;}
     ctx.save();
     if($('mirror').checked){ctx.translate(W,0);ctx.scale(-1,1);}
     ctx.drawImage(vid,0,0,W,H); ctx.restore();
-    if(samples.length) detect(W, H, frameT);
+    if(samples.length) detect(W, H, frameT); else Learn.onFrame({t: frameT, W, H, locked: false});
     drawCross(W,H);
     drawRulers(W,H);
+    Learn.afterDraw(frameT);
     frames++;
     const now = performance.now();
     if(now - fpsT > 500){ $('fps').textContent = (frames*1000/(now-fpsT)).toFixed(0) + ' fps'; frames=0; fpsT=now; }
@@ -485,6 +586,8 @@ function detect(W, H, frameT){
   const s = 4, w = (W/s)|0, h = (H/s)|0;
   work.width = w; work.height = h;
   wctx.drawImage(cv,0,0,w,h);
+  if(snap.width !== W){ snap.width = W; snap.height = H; Learn.setSnap(snap); }
+  sctx.drawImage(cv, 0, 0);
   const img = wctx.getImageData(0,0,w,h), d = img.data;
   const tol = +$('tol').value, N = w*h, k = +$('strict').value/100;
 
@@ -574,12 +677,20 @@ function detect(W, H, frameT){
   // fresh pick: in ball mode the roundest, most solid blob wins; otherwise the biggest
   const score = b => wantRound ? b.shape.round * b.shape.fill + b.cnt * 1e-6 : b.cnt;
   const biggest = () => cands.reduce((m, b) => !m || score(b) > score(m) ? b : m, null);
-  let best = null, holding = false;
+  let best = null, holding = false, fresh = !expect, switched = false;
   if(expect){
     let bd = Infinity;
     for(const b of cands){ const dd = Math.hypot(b.at[0]-expect.x, b.at[1]-expect.y); if(dd < expect.r && dd < bd){ bd = dd; best = b; } }
-    if(!best && cands.length){ if(++holdMiss < 6) holding = true; else best = biggest(); }
+    if(!best && cands.length){ if(++holdMiss < 6) holding = true; else { best = biggest(); fresh = true; switched = true; } }
   } else best = biggest();
+
+  // 6. Double-check with the example library: colour and shape found it, but does it
+  //    LOOK like the examples? A fresh pick tests the top 3 candidates; a held lock is
+  //    re-checked 4 times a second and dropped after two fails in a row.
+  const passed = new Set(cands);
+  const vd = Learn.check({best, cands, fresh, s, t, rank: score});
+  best = vd.best;
+  if(vd.dropped){ track = null; last = null; }
   if(best) holdMiss = 0;
 
   if($('mask').checked){
@@ -604,7 +715,11 @@ function detect(W, H, frameT){
     const ball = wantRound && best.shape;
     const [u, v] = best.at;
     // Start a fresh track after losing the target or a big jump, so old points can't drag the fit
-    if(!last || t - last.t > 200 || Math.hypot(u - last.x, v - last.y) > W*0.25){ trail = []; mapTrail = []; }
+    let jumped = switched;
+    if(!last || t - last.t > 200 || Math.hypot(u - last.x, v - last.y) > W*0.25){
+      if(last && t - last.t <= 200) jumped = true;                 // moved to a different blob, not just re-found
+      trail = []; mapTrail = []; trackId++; trackStart = t;
+    }
     const dPx = ball ? best.shape.d : Math.min(bw, bh);
     trail.push({x:u, y:v, t, d:dPx, edge}); if(trail.length > 240) trail.shift();
     last = {x:u, y:v, t};
@@ -636,12 +751,22 @@ function detect(W, H, frameT){
     ctx.beginPath(); ctx.moveTo(u-12,v); ctx.lineTo(u+12,v); ctx.moveTo(u,v-12); ctx.lineTo(u,v+12); ctx.stroke();
     renderStats({pr, c, u, v, W, H, ahead, model, pxV, d: dPx, r, moving});
     $('hud').textContent = `LOCK  x ${(u-W/2)|0}  y ${(H/2-v)|0}`;
+    const boxOf = b => ({cx: (b.x0 + b.x1 + 1)/2*s, cy: (b.y0 + b.y1 + 1)/2*s, size: Math.max(b.x1 - b.x0 + 1, b.y1 - b.y0 + 1)*s*1.3});
+    const others = comps.filter(b => b !== best && b.cnt >= minCells);
+    const speed = pr.velW ? Math.hypot(pr.velW.vx, pr.velW.vu, pr.velW.vf) : Math.hypot(...pxV);
+    Learn.onFrame({t, W, H, locked: true, holding: false, jumped, trackId, trackAge: t - trackStart, u, v, d: dPx,
+      box: boxOf(best), mode: pr.mode, nowW: pr.nowW || null, speed, pr, ahead, verdict: vd.v, ncands: cands.length,
+      rejected: others.map(b => ({...boxOf(b), reason: passed.has(b) ? 'decoy' : 'shape'})),
+      blobs: comps.filter(b => b.cnt >= minCells).map(boxOf)});
   } else if(holding){
     // something else is visible but the real target vanished: wait before switching
     $('hud').textContent = `HOLDING (ignoring a jump, ${holdMiss}/6)`;
+    Learn.onFrame({t, W, H, locked: false, holding: true});
   } else {
     clearStats();
-    $('hud').textContent='SEARCHING'; last=null; track=null;
+    $('hud').textContent = vd.waiting || vd.rejectedAll ? 'SEARCHING (library said no to what it saw)' : 'SEARCHING'; last=null; track=null;
+    const boxOf = b => ({cx: (b.x0 + b.x1 + 1)/2*s, cy: (b.y0 + b.y1 + 1)/2*s, size: Math.max(b.x1 - b.x0 + 1, b.y1 - b.y0 + 1)*s*1.3});
+    Learn.onFrame({t, W, H, locked: false, holding: false, waiting: vd.waiting, blobs: comps.filter(b => b.cnt >= minCells).map(boxOf)});
   }
 }
 
@@ -729,23 +854,40 @@ function predictBall(c, pts, T, ahead){
   if(raw.length < 4) return null;
   // Rolling = nearly every recent size-based height sits at ball-radius height
   const rolling = raw.filter(p => p.air.up < R + 0.3).length >= 0.85*raw.length && raw.every(p => p.floor);
-  const m = raw.map(p => ({tau:p.tau, ...(rolling ? p.floor : p.air)}));
-  const Ts = m.map(p => p.tau);
-  // Sideways and forward: no force in the air, so straight lines
-  const [x0, vx] = fit1(Ts, m.map(p => p.x)), [f0, vf] = fit1(Ts, m.map(p => p.f));
-  let up0 = R, vu = 0;
+  let m = raw.map(p => ({tau:p.tau, ...(rolling ? p.floor : p.air)}));
   if(!rolling){
-    // Height: only use points since the last bounce, and FIX gravity at 32.2 ft/s².
-    // up(τ) = up0 + vu·τ − ½gτ²  ⇔  up + ½gτ² = up0 + vu·τ  → a straight-line fit for up0 and vu
+    // Only use points since the last bounce (a bounce starts a new arc)
     let k0 = 0;
     for(let i = m.length-2; i > 0; i--){
       if(m[i].up < R + 0.35 && m[i].up <= m[i-1].up && m[i].up <= m[i+1].up){ k0 = i; break; }
     }
-    const seg = m.slice(k0);
-    if(seg.length >= 3) [up0, vu] = fit1(seg.map(p => p.tau), seg.map(p => p.up + 0.5*G*p.tau*p.tau));
-    else up0 = m[m.length-1].up;
-    if(up0 < R) up0 = R;
+    if(m.length - k0 >= 3) m = m.slice(k0);
   }
+  // Fit the physics:
+  //   sideways + forward: no force in the air → straight lines
+  //   height: gravity FIXED at 32.2 ft/s²: up(τ) = up0 + vu·τ − ½gτ²  ⇔  up + ½gτ² = up0 + vu·τ
+  const fitAll = seg => {
+    const Ts = seg.map(p => p.tau);
+    const [x0, vx] = fit1(Ts, seg.map(p => p.x)), [f0, vf] = fit1(Ts, seg.map(p => p.f));
+    let up0 = R, vu = 0;
+    if(!rolling) [up0, vu] = fit1(Ts, seg.map(p => p.up + 0.5*G*p.tau*p.tau));
+    // how far the points sit from the fitted motion (root-mean-square, feet)
+    let eh = 0, eu = 0;
+    for(const p of seg){
+      eh += (p.x - x0 - vx*p.tau)**2 + (p.f - f0 - vf*p.tau)**2;
+      if(!rolling) eu += (p.up - (up0 + vu*p.tau - 0.5*G*p.tau*p.tau))**2;
+    }
+    return {x0, vx, f0, vf, up0, vu, eh: Math.sqrt(eh/seg.length), eu: Math.sqrt(eu/seg.length)};
+  };
+  // If the ball was just thrown, kicked, caught or hit something, the oldest points belong
+  // to a different motion. Drop them one at a time until the physics fits what is left.
+  // Allowed misfit grows with distance, because far-away measurements are noisier.
+  let fit = fitAll(m);
+  const dist = Math.hypot(fit.x0, fit.f0), tolH = 0.08 + 0.02*dist, tolU = 0.05 + 0.01*dist;
+  while((fit.eh > tolH || fit.eu > tolU) && m.length > 5){ m = m.slice(1); fit = fitAll(m); }
+  const {x0, vx, f0, vf} = fit;
+  let up0 = rolling ? R : fit.up0, vu = rolling ? 0 : fit.vu;
+  if(up0 < R) up0 = R;
   // Step the physics forward 1/240 s at a time (exact parabola within each step)
   const dt = 1/240, steps = Math.ceil(Math.max(ahead, 0.1)/dt);
   let x = x0, f = f0, up = up0, ux = vx, uf = vf, uu = vu, roll = rolling, landing = null;
@@ -922,6 +1064,7 @@ function drawCross(W,H){
   ctx.beginPath(); ctx.moveTo(W/2-20,H/2); ctx.lineTo(W/2+20,H/2); ctx.moveTo(W/2,H/2-20); ctx.lineTo(W/2,H/2+20); ctx.stroke();
 }
 navigator.mediaDevices?.addEventListener?.('devicechange', listCams);
+Learn.init();
 </script>
 </body>
 </html>
