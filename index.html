@@ -153,6 +153,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
       </div>
       <label class="chk"><input type="checkbox" id="showmap" checked> Show top + side views</label>
       <button id="rReset">Clear rulers</button>
+      <div class="row"><button id="wAdd">Mark wall</button><button id="wClear">Clear walls</button></div>
       <p class="hint" id="calStatus">No rulers marked.</p>
     </section>
   </aside>
@@ -247,7 +248,18 @@ $('strict').oninput = e => $('strictv').textContent = e.target.value;
 // the gap between the rulers, that is enough to solve the whole camera:
 //   f  focal length in pixels      θ  tilt below level      h  height above the floor
 // World axes (feet): x = right, up = height above the floor, f = forward along the floor.
-let rulers = {far:null, near:null}, rulerPick = null, mapTrail = [], viewPred = null;
+let rulers = {far:null, near:null}, rulerPick = null, mapTrail = [], viewPred = null, walls = [];
+// A wall = two clicks where it meets the floor. In feet that's a line on the floor,
+// and the wall is the vertical plane standing on it. n = unit normal pointing into
+// the room (towards the camera), so "distance from wall" is positive on our side.
+function wallWorld(c, w){
+  const A = pxToPlane(c, ...w.a, 0), B = pxToPlane(c, ...w.b, 0);
+  if(!A || !B) return null;
+  let nx = -(B.f - A.f), nf = B.x - A.x; const L = Math.hypot(nx, nf); if(L < 0.05) return null;
+  nx /= L; nf /= L;
+  if(nx*(0 - A.x) + nf*(0 - A.f) < 0){ nx = -nx; nf = -nf; }    // face the camera
+  return {ax:A.x, af:A.f, bx:B.x, bf:B.f, nx, nf};
+}
 const rulerScale = rl => Math.hypot(rl.b[0]-rl.a[0], rl.b[1]-rl.a[1]) / (+$('rlen').value || 1);
 const rulerRow = rl => (rl.a[1] + rl.b[1]) / 2;
 const rulerMidX = rl => (rl.a[0] + rl.b[0]) / 2;
@@ -299,14 +311,22 @@ const rulerFloor = (c, k) => rulers[k] && pxToPlane(c, rulerMidX(rulers[k]), rul
 function startRuler(which){
   rulerPick = {which, pts:[]};
   $('rFar').classList.toggle('active', which==='far'); $('rNear').classList.toggle('active', which==='near');
-  $('calStatus').textContent = `Click the LEFT end of the ${which} ruler in the video.`;
+  $('wAdd').classList.toggle('active', which==='wall');
+  $('calStatus').textContent = which === 'wall'
+    ? 'Click a point where the wall meets the floor (left side of the wall).'
+    : `Click the LEFT end of the ${which} ruler in the video.`;
 }
 function rulerClick(x, y){
   rulerPick.pts.push([x,y]);
-  if(rulerPick.pts.length === 1){ $('calStatus').textContent = `Now click the RIGHT end of the ${rulerPick.which} ruler.`; return; }
-  rulers[rulerPick.which] = {a:rulerPick.pts[0], b:rulerPick.pts[1]};
-  rulerPick = null; trail = []; mapTrail = [];
-  $('rFar').classList.remove('active'); $('rNear').classList.remove('active');
+  const wall = rulerPick.which === 'wall';
+  if(rulerPick.pts.length === 1){
+    $('calStatus').textContent = wall ? 'Now click another point further along the same wall–floor edge.' : `Now click the RIGHT end of the ${rulerPick.which} ruler.`;
+    return;
+  }
+  if(wall) walls.push({a:rulerPick.pts[0], b:rulerPick.pts[1]});
+  else { rulers[rulerPick.which] = {a:rulerPick.pts[0], b:rulerPick.pts[1]}; trail = []; mapTrail = []; }
+  rulerPick = null;
+  $('rFar').classList.remove('active'); $('rNear').classList.remove('active'); $('wAdd').classList.remove('active');
   updateCalStatus();
 }
 function updateCalStatus(){
@@ -322,6 +342,7 @@ function updateCalStatus(){
   } else if(parseFloat($('rgap').value) > 0){
     msg += ' Those rulers and that gap don’t fit a flat floor. Re-mark them or re-measure the gap.';
   } else msg += ' Enter the gap between the rulers to turn on 3D.';
+  if(walls.length) msg += ` ${walls.length} wall${walls.length > 1 ? 's' : ''} marked${c ? '' : ' (they work once the rulers + gap are set)'}.`;
   $('calStatus').textContent = msg;
 }
 function drawRulers(W, H){
@@ -337,6 +358,14 @@ function drawRulers(W, H){
   if(rulerPick) for(const p of rulerPick.pts){ ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fill(); }
   ctx.restore();
   const c = calib();
+  for(const w of walls){
+    ctx.save(); ctx.strokeStyle = '#ff7ad9'; ctx.fillStyle = 'rgba(255,122,217,.10)'; ctx.lineWidth = 3;
+    const ww = c && wallWorld(c, w), top = ww && [worldToPx(c, {x:ww.ax, up:3, f:ww.af}), worldToPx(c, {x:ww.bx, up:3, f:ww.bf})];
+    if(top && top[0] && top[1]){ ctx.beginPath(); ctx.moveTo(...w.a); ctx.lineTo(...w.b); ctx.lineTo(...top[1]); ctx.lineTo(...top[0]); ctx.closePath(); ctx.fill(); }
+    ctx.beginPath(); ctx.moveTo(...w.a); ctx.lineTo(...w.b); ctx.stroke();
+    ctx.font = '600 16px "JetBrains Mono", monospace'; ctx.fillStyle = '#ff7ad9'; ctx.fillText('wall', (w.a[0]+w.b[0])/2 - 18, (w.a[1]+w.b[1])/2 - 10);
+    ctx.restore();
+  }
   if($('showmap').checked && c) drawViews(W, H, c);
 }
 
@@ -366,9 +395,16 @@ function drawViews(W, H, c){
   for(let z = 1; z < maxF; z++){ const y = camY - z*sc; ctx.beginPath(); ctx.moveTo(tx0, y); ctx.lineTo(tx0+size, y); ctx.stroke(); }
   ctx.strokeStyle = '#c792ff'; ctx.lineWidth = 2; const half = (+$('rlen').value || 1)/2;
   for(const r of [nr, fr]) if(r){ ctx.beginPath(); ctx.moveTo(...P({x:r.x-half, f:r.f})); ctx.lineTo(...P({x:r.x+half, f:r.f})); ctx.stroke(); }
+  ctx.strokeStyle = '#ff7ad9'; ctx.lineWidth = 3;
+  for(const ww of walls.map(w => wallWorld(c, w)).filter(Boolean)){     // walls, extended across the panel
+    const dx = ww.bx - ww.ax, df = ww.bf - ww.af, L = Math.hypot(dx, df), k = 60 / L;
+    ctx.beginPath(); ctx.moveTo(...P({x: ww.ax - dx*k, f: ww.af - df*k})); ctx.lineTo(...P({x: ww.bx + dx*k, f: ww.bf + df*k})); ctx.stroke();
+  }
   for(const p of mapTrail){ const [x, y] = P(p); ctx.fillStyle = '#ffb020'; ctx.fillRect(x-1.5, y-1.5, 3, 3); }
   if(viewPred){
     poly(viewPred.path.map(P), '#3aa0ff', 3);
+    ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
+    for(const h of viewPred.wallHits){ const [x, y] = P(h); cross(x, y); }
     for(const q of viewPred.ticks){ const [x, y] = P(q); dot(x, y, 3, '#3aa0ff'); }
     ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
     for(const b of viewPred.bounces){ const [x, y] = P(b); cross(x, y); }
@@ -391,9 +427,16 @@ function drawViews(W, H, c){
   ctx.strokeStyle = 'rgba(223,231,234,.35)'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
   ctx.beginPath(); ctx.moveTo(cxS, cyS); ctx.lineTo(cxS + Math.cos(c.th)*sw, cyS + Math.sin(c.th)*sw); ctx.stroke(); ctx.setLineDash([]);
   dot(cxS, cyS, 5, '#dfe7ea');
+  ctx.strokeStyle = 'rgba(255,122,217,.7)'; ctx.lineWidth = 3;
+  for(const ww of walls.map(w => wallWorld(c, w)).filter(Boolean)){     // a wall crossing straight ahead shows as a vertical line
+    const df = ww.bf - ww.af, dx = ww.bx - ww.ax;
+    if(Math.abs(dx) > 1e-6){ const tt = -ww.ax/dx; if(tt > -3 && tt < 4){ const [x] = S({f: ww.af + df*tt, up:0}); ctx.beginPath(); ctx.moveTo(x, oy); ctx.lineTo(x, y0+22); ctx.stroke(); } }
+  }
   for(const p of mapTrail){ const [x, y] = S(p); ctx.fillStyle = '#ffb020'; ctx.fillRect(x-1.5, y-1.5, 3, 3); }
   if(viewPred){
     poly(viewPred.path.map(S), '#3aa0ff', 3);
+    ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
+    for(const h of viewPred.wallHits){ const [x, y] = S(h); cross(x, y); }
     for(const q of viewPred.ticks){ const [x, y] = S(q); dot(x, y, 3, '#3aa0ff'); }
     ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
     for(const b of viewPred.bounces){ const [x, y] = S({f:b.f, up:0}); cross(x, y); }
@@ -403,6 +446,8 @@ function drawViews(W, H, c){
 }
 $('rFar').onclick = () => startRuler('far');
 $('rNear').onclick = () => startRuler('near');
+$('wAdd').onclick = () => startRuler('wall');
+$('wClear').onclick = () => { walls = []; updateCalStatus(); };
 $('rReset').onclick = () => { rulers = {far:null, near:null}; rulerPick = null; trail = []; mapTrail = []; updateCalStatus(); };
 $('rgap').oninput = $('rlen').oninput = $('balld').oninput = () => { trail = []; mapTrail = []; updateCalStatus(); };
 $('model').onchange = () => { trail = []; mapTrail = []; };
@@ -576,7 +621,7 @@ function detect(W, H, frameT){
       const path = [], ticks = [];
       for(let i = 0; i <= 40; i++) path.push(pr.atW(ahead*i/40));
       for(let k = 0.25; k < ahead; k += 0.25) ticks.push(pr.atW(k));
-      viewPred = {path, ticks, bounces: pr.bounces || []};
+      viewPred = {path, ticks, bounces: pr.bounces || [], wallHits: pr.wallHits || []};
     }
     if(pr.nowW){ mapTrail.push(pr.nowW); if(mapTrail.length > 200) mapTrail.shift(); }
 
@@ -610,6 +655,8 @@ function detect(W, H, frameT){
 const G = 32.17;          // gravity, ft/s²
 const BOUNCE = 0.78;      // basketball: keeps ~78% of its vertical speed per bounce (≈ 61% of drop height)
 const SKID = 0.92;        // and loses a little sideways speed on each bounce
+const WALL_BOUNCE = 0.75; // off a wall: keeps ~75% of the speed going into the wall…
+const WALL_SCRUB = 0.9;   // …and ~90% of the speed along it (friction while touching)
 
 function predict({model, c, t, W, ahead, u, v}){
   const win = +$('win').value/1000;
@@ -702,7 +749,8 @@ function predictBall(c, pts, T, ahead){
   // Step the physics forward 1/240 s at a time (exact parabola within each step)
   const dt = 1/240, steps = Math.ceil(Math.max(ahead, 0.1)/dt);
   let x = x0, f = f0, up = up0, ux = vx, uf = vf, uu = vu, roll = rolling, landing = null;
-  const path = [{x, up, f}], bounces = [];
+  const path = [{x, up, f}], bounces = [], wallHits = [];
+  const wallsW = walls.map(w => wallWorld(c, w)).filter(Boolean);
   for(let i = 1; i <= steps; i++){
     x += ux*dt; f += uf*dt;
     if(!roll){
@@ -714,10 +762,22 @@ function predictBall(c, pts, T, ahead){
         if(uu < 2){ uu = 0; roll = true; }                 // too weak to bounce again: rolls
       }
     }
+    // Walls: when the ball's edge reaches a wall while moving into it, split its floor
+    // velocity into "into the wall" and "along the wall". Flip the first (×0.75),
+    // keep most of the second (×0.9). Height and falling carry on unchanged.
+    for(const wl of wallsW){
+      const dist = wl.nx*(x - wl.ax) + wl.nf*(f - wl.af), vn = ux*wl.nx + uf*wl.nf;
+      if(dist < R && vn < 0){
+        x += (R - dist)*wl.nx; f += (R - dist)*wl.nf;
+        const tx = ux - vn*wl.nx, tf = uf - vn*wl.nf;
+        ux = tx*WALL_SCRUB - WALL_BOUNCE*vn*wl.nx; uf = tf*WALL_SCRUB - WALL_BOUNCE*vn*wl.nf;
+        wallHits.push({x: x - R*wl.nx, up, f: f - R*wl.nf, tx: -wl.nf, tf: wl.nx});
+      }
+    }
     path.push({x, up, f});
   }
   const atW = tau => path[Math.max(0, Math.min(path.length-1, Math.round(tau/dt)))];
-  return {mode:'ball', R, D, rolling, landing, bounces, atW, at: tau => worldToPx(c, atW(tau)),
+  return {mode:'ball', R, D, rolling, landing, bounces, wallHits, atW, at: tau => worldToPx(c, atW(tau)),
           nowW:{x:x0, up:up0, f:f0}, velW:{vx, vu: rolling ? 0 : vu, vf}};
 }
 
@@ -741,6 +801,18 @@ function drawPrediction(pr, ahead, c){
   if(pr.bounces && c){
     ctx.lineWidth = 3;
     for(const b of pr.bounces) floorRing(c, b.x, b.f, pr.R, '#3aa0ff');
+  }
+  if(pr.wallHits && c){
+    ctx.lineWidth = 3; ctx.strokeStyle = '#3aa0ff';
+    for(const h of pr.wallHits){
+      ctx.beginPath(); let pen = false;
+      for(let i = 0; i <= 32; i++){
+        const a = i/32*Math.PI*2, p = worldToPx(c, {x: h.x + pr.R*Math.cos(a)*h.tx, up: h.up + pr.R*Math.sin(a), f: h.f + pr.R*Math.cos(a)*h.tf});
+        if(!p){ pen = false; continue; }
+        pen ? ctx.lineTo(...p) : ctx.moveTo(...p); pen = true;
+      }
+      ctx.stroke();
+    }
   }
   ctx.restore();
 }
