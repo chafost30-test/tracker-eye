@@ -42,7 +42,11 @@ h2{font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.12em;color
 .center{min-height:0;display:flex;justify-content:center;align-items:flex-start}
 .stage{position:relative;background:#000;border:1px solid var(--line);border-radius:6px;overflow:hidden;aspect-ratio:16/9;width:100%;max-width:calc((100vh - 70px) * 16 / 9)}
 .stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;cursor:crosshair}
-.stage .msg{position:absolute;inset:0;pointer-events:none;display:grid;place-items:center;color:var(--dim);text-align:center;padding:24px}
+.stage.dual{aspect-ratio:32/9;max-width:calc((100vh - 70px) * 32 / 9)}
+.stage.dual #view{right:50%;width:50%} .stage.dual #view2{left:50%;width:50%}
+.stage.dual #msg2{left:50%}
+.stage.dual::after{content:"";position:absolute;top:0;bottom:0;left:50%;border-left:2px solid var(--line);pointer-events:none}
+.stage .msg{position:absolute;inset:0;z-index:2;pointer-events:none;display:grid;place-items:center;color:var(--dim);text-align:center;padding:24px}
 .hud{position:absolute;left:10px;top:10px;font-size:12px;background:rgba(0,0,0,.55);padding:6px 8px;border-radius:4px;pointer-events:none;font-variant-numeric:tabular-nums}
 
 /* Controls */
@@ -121,7 +125,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
   <main class="center">
     <div class="stage" id="stage">
       <canvas id="view"></canvas>
-      <div class="msg" id="msg">Click “Start camera” and allow camera access.</div>
+      <canvas id="view2" hidden></canvas>
+      <div class="msg" id="msg">Click “Start 1” and allow camera access.</div>
+      <div class="msg" id="msg2" hidden></div>
       <div class="hud" id="hud" hidden></div>
     </div>
   </main>
@@ -133,9 +139,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
       <button data-tab="rec">Record &amp; report</button>
     </div>
     <section data-pane="track">
-      <h2>Camera</h2>
-      <select id="cam" aria-label="Camera device"><option value="">— start camera first —</option></select>
-      <div class="row"><button id="start">Start camera</button><button id="stop">Stop</button></div>
+      <h2>Cameras</h2>
+      <div class="row"><select id="cam" aria-label="Camera 1"><option value="">— camera 1 —</option></select><button id="start" style="flex:0 0 auto;width:auto">Start 1</button><button id="stop" style="flex:0 0 auto;width:auto">Stop</button></div>
+      <div class="row"><select id="cam2" aria-label="Camera 2"><option value="">— camera 2 —</option></select><button id="start2" style="flex:0 0 auto;width:auto">Start 2</button><button id="stop2" style="flex:0 0 auto;width:auto">Stop</button></div>
+      <select id="viewMode" aria-label="Show"><option value="both">Show both cameras</option><option value="1">Show camera 1</option><option value="2">Show camera 2</option></select>
 
       <h2 style="margin-top:8px">Target colour</h2>
       <div class="swatch"><span id="sws" class="swatches"><i></i></span><span id="swtxt">Click the target in the video</span></div>
@@ -149,9 +156,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
       <input type="range" id="minpx" min="5" max="1000" value="40">
       <label for="merge">Merge gap <span id="mergev">3</span> (join thin parts)</label>
       <input type="range" id="merge" min="0" max="8" value="3">
-      <label class="chk"><input type="checkbox" id="mask"> Show mask</label>
-      <label class="chk"><input type="checkbox" id="trail" checked> Show trail</label>
-      <label class="chk"><input type="checkbox" id="mirror"> Mirror view</label>
+      <div class="row"><label class="chk"><input type="checkbox" id="mask"> Mask</label><label class="chk"><input type="checkbox" id="trail" checked> Trail</label><label class="chk"><input type="checkbox" id="mirror"> Mirror</label></div>
     </section>
 
     <section data-pane="track">
@@ -173,7 +178,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
       <input type="range" id="minspd" min="0" max="300" step="10" value="40">
 
       <h2 style="margin-top:8px">Floor rulers</h2>
-      <p class="hint">Lay a ruler across the far end of the view and one across the bottom. Click a button, then both ends of that ruler.</p>
+      <p class="hint">Far ruler straight out from the near one, parallel and centred. Mark both rulers <b>in each camera</b>: click a button, then end A then end B in that camera’s picture.</p>
       <div class="row"><button id="rFar">Mark far</button><button id="rNear">Mark near</button></div>
       <div class="row">
         <div><label for="rlen">Ruler length (ft)</label><input type="number" id="rlen" class="num" value="1" min="0.1" step="0.1"></div>
@@ -236,9 +241,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
     <section data-pane="rec" hidden>
       <h2>Replay</h2>
-      <p class="hint">Run a saved video through the tracker again, to compare versions on exactly the same footage.</p>
-      <button id="replayBtn">Replay a video file…</button>
-      <input type="file" id="replayIn" accept="video/*" hidden>
+      <p class="hint">Run saved video through the tracker again to compare versions on the same footage. For two cameras, pick both videos from a report together.</p>
+      <button id="replayBtn">Replay video file(s)…</button>
+      <input type="file" id="replayIn" accept="video/*" multiple hidden>
       <h2 style="margin-top:8px">Demo day</h2>
       <label class="chk"><input type="checkbox" id="demoMode"> Demo mode (frozen: no learning)</label>
       <p class="hint">Use a version you have tested. CONFIRMED only shows when colour, shape and the library all agree.</p>
@@ -264,81 +269,118 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 <!-- Safari stops updating a display:none video, so keep it "visible" but off-screen -->
 <video id="vid" playsinline muted autoplay style="position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0"></video>
+<video id="vid2" playsinline muted autoplay style="position:fixed;left:-9999px;top:4px;width:2px;height:2px;opacity:0"></video>
 <script src="learn.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const vid = $('vid'), cv = $('view'), ctx = cv.getContext('2d', {willReadFrequently:true});
 const work = document.createElement('canvas'), wctx = work.getContext('2d', {willReadFrequently:true});
-// clean copy of each frame (before any overlays) for the library check and labelling
-const snap = document.createElement('canvas'), sctx = snap.getContext('2d', {willReadFrequently:true});
-let stream = null, samples = [], trail = [], last = null, track = null, holdMiss = 0, trackId = 0, trackStart = 0, frames = 0, fpsT = performance.now();
+let samples = [], mapTrail = [], viewPred = null, walls = [], rulerPick = null;
 
 function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;
   if(d){h=mx===r?((g-b)/d)%6:mx===g?(b-r)/d+2:(r-g)/d+4;h*=60;if(h<0)h+=360}
   return [h, mx?d/mx:0, mx];}
 
-async function listCams(){
-  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
-  const sel = $('cam'), cur = stream?.getVideoTracks()[0]?.getSettings().deviceId;
-  sel.innerHTML = devs.map((d,i)=>`<option value="${d.deviceId}">${d.label||'Camera '+(i+1)}</option>`).join('');
-  if(cur) sel.value = cur;
+// =========================================================================
+// Cameras. Each camera has its own video, canvas, rulers and lock; all of them
+// feed ONE shared 3D track (F below). Camera 1 defines the room's map.
+// =========================================================================
+function makeCam(i, vidId, cvId, msgId){
+  const cvEl = $(cvId), snapC = document.createElement('canvas');
+  return {i, name: `Cam ${i+1}`, vid: $(vidId), cv: cvEl, ctx: cvEl.getContext('2d', {willReadFrequently: true}), msg: $(msgId),
+    snap: snapC, sctx: snapC.getContext('2d', {willReadFrequently: true}), stream: null, replay: false, res: '',
+    rulers: {far: null, near: null}, trail: [], last: null, track: null, holdMiss: 0, trackId: 0, trackStart: 0,
+    dets: [], raw: [], clock: 0, clockSet: false, disagree: 0, frames: 0, fpsT: performance.now(), fps: 0, lockedAt: -1e9, state: '—', looping: false};
+}
+const cams = [makeCam(0, 'vid', 'view', 'msg'), makeCam(1, 'vid2', 'view2', 'msg2')];
+let cv = cams[0].cv, ctx = cams[0].ctx;                 // the camera currently being drawn
+const use = cam => { cv = cam.cv; ctx = cam.ctx; };
+const isActive = cam => !!(cam.stream || cam.replay || cam.fake);
+const activeCams = () => cams.filter(isActive);
+const primary = () => activeCams()[0] || cams[0];
+// The shared 3D track: world points from every camera, triangulated when both see the ball
+const F = {trail: [], pr: null, t: -1e9, id: 0, start: 0, lastAccept: -1e9, kind: '', gap: null, angle: null};
+function resetTracking(){
+  for(const c of cams){ c.trail = []; c.last = null; c.track = null; c.dets = []; c.raw = []; c.holdMiss = 0; c.disagree = 0; }
+  F.trail = []; F.pr = null; F.t = -1e9; F.lastAccept = -1e9; F.lastStereo = -1e9; F.lastByCam = [-1e9, -1e9]; mapTrail = []; viewPred = null;
 }
 
-async function start(deviceId){
-  stop(); vid.removeAttribute('src');
-  $('msg').hidden = false; $('msg').textContent = 'Starting camera…';
+async function listCams(){
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  for(const cam of cams){
+    const sel = $(cam.i ? 'cam2' : 'cam'), cur = cam.stream?.getVideoTracks()[0]?.getSettings().deviceId || sel.value;
+    sel.innerHTML = devs.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Camera ' + (i+1)}</option>`).join('');
+    if(cur) sel.value = cur; else if(cam.i && devs[1]) sel.value = devs[1].deviceId;
+  }
+}
+function setMsg(cam, text){ cam.msg.hidden = !text; if(text) cam.msg.textContent = text; }
+async function startCam(cam, deviceId){
+  stopCam(cam); cam.vid.removeAttribute('src'); cam.replay = false;
+  const other = cams[1 - cam.i];
+  if(deviceId && other.stream && other.stream.getVideoTracks()[0]?.getSettings().deviceId === deviceId){
+    setMsg(cam, `That camera is already Camera ${other.i + 1}. Pick a different one.`); layout(); return;
+  }
+  setMsg(cam, 'Starting camera…'); layout();
   const video = {width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60}};
   if(deviceId) video.deviceId = {exact:deviceId};
   try{
-    try{ stream = await navigator.mediaDevices.getUserMedia({video, audio:false}); }
+    try{ cam.stream = await navigator.mediaDevices.getUserMedia({video, audio:false}); }
     catch(e){
       if(e.name !== 'OverconstrainedError') throw e;
-      // Fall back to the plainest request the browser will accept
-      stream = await navigator.mediaDevices.getUserMedia({video: deviceId ? {deviceId} : true, audio:false});
+      cam.stream = await navigator.mediaDevices.getUserMedia({video: deviceId ? {deviceId} : true, audio:false});
     }
-  }catch(e){ $('msg').textContent = 'Camera failed (' + (e.name || 'error') + (e.message ? ': ' + e.message : '') + '). Allow camera access for this page, and in System Settings → Privacy & Security → Camera, for your browser.'; return; }
-  vid.srcObject = stream; await vid.play();
-  $('msg').hidden = true; $('hud').hidden = false;
+  }catch(e){ setMsg(cam, 'Camera failed (' + (e.name || 'error') + (e.message ? ': ' + e.message : '') + '). Allow camera access for this page, and in System Settings → Privacy & Security → Camera, for your browser.'); return; }
+  cam.vid.srcObject = cam.stream; await cam.vid.play();
+  setMsg(cam, null); $('hud').hidden = false;
   await listCams();
-  const s = stream.getVideoTracks()[0].getSettings();
-  $('res').textContent = `${s.width}×${s.height}`;
-  nextFrame();
+  const s = cam.stream.getVideoTracks()[0].getSettings(); cam.res = `${s.width}×${s.height}`;
+  layout(); startLoop(cam);
 }
-function stop(){ if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;} }
+function stopCam(cam){ if(cam.stream){ cam.stream.getTracks().forEach(t => t.stop()); cam.stream = null; } layout(); }
+function stopAll(){ cams.forEach(stopCam); }
+// Show one or both cameras side by side
+function layout(){
+  const a0 = isActive(cams[0]), a1 = isActive(cams[1]), mode = $('viewMode').value;
+  // a stopped camera is hidden; with nothing running, camera 1's area shows the start message
+  const show0 = (a0 && (mode !== '2' || !a1)) || (!a0 && !a1), show1 = a1 && (mode !== '1' || !a0);
+  cams[0].cv.hidden = !show0; cams[1].cv.hidden = !show1;
+  if(!show1) cams[1].msg.hidden = true;
+  $('stage').classList.toggle('dual', show0 && show1);
+}
 
-$('start').onclick = () => start($('cam').value || undefined);
-$('stop').onclick = () => { stop(); $('msg').hidden=false; $('msg').textContent='Camera stopped.'; $('hud').hidden=true; };
-$('cam').onchange = e => start(e.target.value);
+$('start').onclick = () => startCam(cams[0], $('cam').value || undefined);
+$('stop').onclick = () => { stopCam(cams[0]); setMsg(cams[0], 'Camera 1 stopped.'); };
+$('cam').onchange = e => startCam(cams[0], e.target.value);
+$('start2').onclick = () => startCam(cams[1], $('cam2').value || undefined);
+$('stop2').onclick = () => stopCam(cams[1]);
+$('cam2').onchange = e => { if(cams[1].stream) startCam(cams[1], e.target.value); };
+$('viewMode').onchange = layout;
 $('tol').oninput = e => $('tolv').textContent = e.target.value;
 $('minpx').oninput = e => $('minpxv').textContent = e.target.value;
 
-// Click the video to pick the target colour. Looks at a 21×21 patch but only keeps
-// pixels with real colour: grey, near-black (seams, shadows) and glare have no
-// meaningful hue and would make the filter match almost anything dark.
-cv.addEventListener('click', ev => {
-  if(!stream && !window.__fakeCam) return;
-  const r = cv.getBoundingClientRect();
-  const scale = Math.min(r.width/cv.width, r.height/cv.height);
-  const ox = (r.width - cv.width*scale)/2, oy = (r.height - cv.height*scale)/2;
-  const x = Math.round((ev.clientX - r.left - ox)/scale), y = Math.round((ev.clientY - r.top - oy)/scale);
-  if(rulerPick){ rulerClick(x, y); return; }   // in ruler mode, clicks mark ruler ends
-  if(Learn.labelClick(x, y)) return;            // in label mode, clicks save examples
-  const d = ctx.getImageData(Math.max(0,x-10), Math.max(0,y-10), 21, 21).data;
+// Clicks on a camera's picture: ruler/wall marking, live labelling, or colour picking.
+// Colour picking looks at a 21×21 patch but keeps only pixels with real colour
+// (grey, near-black seams/shadows and glare have no meaningful hue).
+function canvasXY(cam, ev){
+  const r = cam.cv.getBoundingClientRect(), scale = Math.min(r.width/cam.cv.width, r.height/cam.cv.height);
+  const ox = (r.width - cam.cv.width*scale)/2, oy = (r.height - cam.cv.height*scale)/2;
+  return [Math.round((ev.clientX - r.left - ox)/scale), Math.round((ev.clientY - r.top - oy)/scale)];
+}
+for(const cam of cams) cam.cv.addEventListener('click', ev => {
+  if(!isActive(cam) && !window.__fakeCam) return;
+  const [x, y] = canvasXY(cam, ev);
+  if(rulerPick){ rulerClick(cam, x, y); return; }
+  if(Learn.labelClick(x, y, cam.i)) return;
+  const d = cam.ctx.getImageData(Math.max(0,x-10), Math.max(0,y-10), 21, 21).data;
   const good = [];
   for(let i=0;i<d.length;i+=4){ const q = rgbToHsv(d[i],d[i+1],d[i+2]); if(q[1] >= 0.3 && q[2] >= 0.25 && q[2] <= 0.97) good.push([q, d[i], d[i+1], d[i+2]]); }
-  if(good.length < 20){
-    $('swtxt').textContent = 'That spot is too dark, grey or shiny to track. Click a bright, colourful part of the target.';
-    return;
-  }
-  // circular average for hue (so reds near 0°/360° don't average to cyan), medians for the rest
+  if(good.length < 20){ $('swtxt').textContent = 'That spot is too dark, grey or shiny to track. Click a bright, colourful part of the target.'; return; }
   let hx=0, hy=0; for(const [q] of good){ hx += Math.cos(q[0]*Math.PI/180); hy += Math.sin(q[0]*Math.PI/180); }
   const med = a => a.sort((m,n)=>m-n)[a.length>>1];
   const hsv = [(Math.atan2(hy,hx)*180/Math.PI+360)%360, med(good.map(g=>g[0][1])), med(good.map(g=>g[0][2]))];
   const R = med(good.map(g=>g[1])), G = med(good.map(g=>g[2])), B = med(good.map(g=>g[3]));
   if(!ev.shiftKey) samples = [];
   samples.push({hsv, rgb:`rgb(${R},${G},${B})`});
-  trail = []; last = null; track = null;
-  renderSwatches();
+  resetTracking(); renderSwatches();
 });
 function renderSwatches(){
   $('sws').innerHTML = samples.length ? samples.map(s=>`<i style="background:${s.rgb}"></i>`).join('') : '<i></i>';
@@ -346,149 +388,268 @@ function renderSwatches(){
     ? `${samples.length} sample${samples.length>1?'s':''}` + (samples.length===1?` · hue ${samples[0].hsv[0]|0}°`:'')
     : 'Click the target in the video';
 }
-$('clear').onclick = () => { samples = []; trail = []; last = null; renderSwatches(); };
+$('clear').onclick = () => { samples = []; resetTracking(); renderSwatches(); };
 $('merge').oninput = e => $('mergev').textContent = e.target.value;
 $('strict').oninput = e => $('strictv').textContent = e.target.value;
-// ---- Floor rulers → camera model ----------------------------------------
-// Each ruler gives "pixels per foot" at its row. On a flat floor that scale falls
-// in a straight line up the image and reaches zero at the horizon. Together with
-// the gap between the rulers, that is enough to solve the whole camera:
-//   f  focal length in pixels      θ  tilt below level      h  height above the floor
-// World axes (feet): x = right, up = height above the floor, f = forward along the floor.
-let rulers = {far:null, near:null}, rulerPick = null, mapTrail = [], viewPred = null, walls = [];
-// A wall = two clicks where it meets the floor. In feet that's a line on the floor,
-// and the wall is the vertical plane standing on it. n = unit normal pointing into
-// the room (towards the camera), so "distance from wall" is positive on our side.
-function wallWorld(c, w){
+
+// =========================================================================
+// Calibration: the two floor rulers → a full camera model, from ANY angle.
+//
+// Lay the far ruler straight out from the near one, parallel, centred. Then the 4
+// ruler ends sit at known floor spots (feet): A_near(−L/2, 0), B_near(L/2, 0),
+// A_far(−L/2, gap), B_far(L/2, gap). Clicking them in a camera gives a floor→picture
+// mapping (a homography, H). From H we solve the camera: focal length f, rotation R
+// (which way it points, including turned sideways) and position. Camera 1 then
+// defines the room's map: x = right, f = forward along the floor, up = height.
+// =========================================================================
+const calCache = new Map();
+function solveLinear(A, b){                       // Gaussian elimination with pivoting
+  const n = b.length, M = A.map((r, i) => [...r, b[i]]);
+  for(let c = 0; c < n; c++){
+    let p = c; for(let r = c+1; r < n; r++) if(Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if(Math.abs(M[p][c]) < 1e-12) return null; [M[c], M[p]] = [M[p], M[c]];
+    for(let r = 0; r < n; r++) if(r !== c){ const k = M[r][c]/M[c][c]; for(let j = c; j <= n; j++) M[r][j] -= k*M[c][j]; }
+  }
+  return M.map((r, i) => r[n]/r[i]);
+}
+const dot3 = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross3 = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm3 = a => { const l = Math.hypot(...a) || 1; return a.map(v => v/l); };
+// Camera pose in the RULER frame (X along the near ruler A→B, Y toward the far ruler, Z up)
+const rawCache = new Map();
+function calibRaw(cam){
+  const key = JSON.stringify([cam.rulers, $('rgap').value, $('rlen').value, cam.cv.width, cam.cv.height, isActive(cam)]);
+  if(rawCache.has(key)) return rawCache.get(key);
+  const out = calibRawSolve(cam); if(rawCache.size > 50) rawCache.clear(); rawCache.set(key, out); return out;
+}
+function calibRawSolve(cam){
+  const r = cam.rulers, gap = parseFloat($('rgap').value), L = +$('rlen').value || 1;
+  if(!r.far || !r.near || !(gap > 0)) return null;
+  // Clicks were made on a picture of size r.size. Use the camera's current size once its video
+  // is running (rescaling the clicks if the resolution changed); until then, the size at marking.
+  const [mw, mh] = r.size || [cam.cv.width, cam.cv.height];
+  const live = cam.cv.width > 320 && (isActive(cam) || !r.size);
+  const W = live ? cam.cv.width : mw, Hh = live ? cam.cv.height : mh, k = W/mw;
+  const s = W/2, cx = W/2, cy = Hh/2;
+  const world = [[-L/2, 0], [L/2, 0], [-L/2, gap], [L/2, gap]];
+  const img = [r.near.a, r.near.b, r.far.a, r.far.b].map(([u, v]) => [(u*k - cx)/s, (v*(Hh/mh) - cy)/s]);
+  const A = [], b = [];
+  for(let k = 0; k < 4; k++){
+    const [X, Y] = world[k], [u, v] = img[k];
+    A.push([X, Y, 1, 0, 0, 0, -u*X, -u*Y]); b.push(u);
+    A.push([0, 0, 0, X, Y, 1, -v*X, -v*Y]); b.push(v);
+  }
+  const h = solveLinear(A, b); if(!h) return null;
+  const H = [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]];
+  const col = j => [H[0][j], H[1][j], H[2][j]];
+  const h1 = col(0), h2 = col(1), h3 = col(2);
+  // K = diag(fn, fn, 1). r1 ⟂ r2 and |r1| = |r2| give two equations in w = 1/fn²
+  const a1 = h1[0]*h2[0] + h1[1]*h2[1], b1 = h1[2]*h2[2];
+  const a2 = h1[0]**2 + h1[1]**2 - h2[0]**2 - h2[1]**2, b2 = h1[2]**2 - h2[2]**2;
+  const w = -(a1*b1 + a2*b2) / (a1*a1 + a2*a2);
+  if(!(w > 0)) return null;
+  const fn = 1/Math.sqrt(w), Kinv = v => [v[0]/fn, v[1]/fn, v[2]];
+  let k1 = Kinv(h1), k2 = Kinv(h2), k3 = Kinv(h3);
+  let lam = 2/(Math.hypot(...k1) + Math.hypot(...k2));
+  if(k3[2]*lam < 0) lam = -lam;                    // the rulers must be in front of the camera
+  let r1 = norm3(k1.map(v => v*lam)), r2 = k2.map(v => v*lam);
+  r2 = norm3(r2.map((v, i) => v - dot3(r1, r2)*r1[i]));
+  const r3 = cross3(r1, r2), t = k3.map(v => v*lam);
+  const R = [[r1[0], r2[0], r3[0]], [r1[1], r2[1], r3[1]], [r1[2], r2[2], r3[2]]];   // world → camera
+  const C = [0, 1, 2].map(j => -(R[0][j]*t[0] + R[1][j]*t[1] + R[2][j]*t[2]));        // camera centre (ruler frame)
+  if(!(C[2] > 0)) return {bad: 'order'};           // camera "below the floor" = ends clicked in the opposite order
+  return {f: fn*s, cx, cy, R, t, C, W, H: Hh};
+}
+// Camera model in the ROOM frame (camera 1's view: x right, f forward, up)
+function calib(cam){
+  const home = calibRaw(cams[0])?.R ? cams[0] : cams[1];
+  const key = JSON.stringify([cam.rulers, home.i, home.rulers, $('rgap').value, $('rlen').value, cam.cv.width, cam.cv.height, home.cv.width, home.cv.height, isActive(cam), isActive(home)]);
+  if(calCache.has(key)) return calCache.get(key);
+  let out = null;
+  const raw = calibRaw(cam), hr = calibRaw(home);
+  if(raw?.R && hr?.R){
+    // room frame: origin on the floor under the home camera, f = its forward direction
+    const fw = [hr.R[2][0], hr.R[2][1]], yaw = Math.atan2(fw[0], fw[1]);
+    const xa = [Math.cos(yaw), -Math.sin(yaw), 0], fa = [Math.sin(yaw), Math.cos(yaw), 0], za = [0, 0, 1];
+    const O = [hr.C[0], hr.C[1], 0];
+    const M = [[xa[0], fa[0], za[0]], [xa[1], fa[1], za[1]], [xa[2], fa[2], za[2]]];    // room → ruler
+    const R = raw.R.map(row => [0, 1, 2].map(j => row[0]*M[0][j] + row[1]*M[1][j] + row[2]*M[2][j]));
+    const t = raw.R.map((row, i) => dot3(row, O) + raw.t[i]);
+    const d = raw.C.map((v, i) => v - O[i]);
+    const C = {x: dot3(xa, d), f: dot3(fa, d), up: raw.C[2]};
+    const fwd = [R[2][0], R[2][1], R[2][2]];       // camera forward in room axes (x, f, up)
+    out = {f: raw.f, cx: raw.cx, cy: raw.cy, R, t, C, h: C.up,
+           tilt: Math.asin(Math.max(-1, Math.min(1, -fwd[2]))), yaw: Math.atan2(fwd[0], fwd[1]), cam: cam.i};
+  }
+  if(calCache.size > 50) calCache.clear();
+  calCache.set(key, out);
+  return out;
+}
+// pixel → viewing direction in room axes [x, f, up]
+function rayW(c, u, v){ const d = [(u - c.cx)/c.f, (v - c.cy)/c.f, 1]; return [0, 1, 2].map(j => c.R[0][j]*d[0] + c.R[1][j]*d[1] + c.R[2][j]*d[2]); }
+// room point → pixel (null if behind the camera)
+function worldToPx(c, p){
+  if(!p || !c) return null;
+  const X = [p.x, p.f, p.up], xc = dot3(c.R[0], X) + c.t[0], yc = dot3(c.R[1], X) + c.t[1], zc = dot3(c.R[2], X) + c.t[2];
+  return zc > 0.05 ? [c.cx + c.f*xc/zc, c.cy + c.f*yc/zc] : null;
+}
+const camDepth = (c, p) => dot3(c.R[2], [p.x, p.f, p.up]) + c.t[2];
+// where the ray through pixel (u,v) crosses the horizontal plane at height H0
+function pxToPlane(c, u, v, H0){
+  const d = rayW(c, u, v); if(Math.abs(d[2]) < 1e-6) return null;
+  const k = (H0 - c.C.up)/d[2]; if(k <= 0) return null;
+  return {x: c.C.x + k*d[0], f: c.C.f + k*d[1], up: H0};
+}
+// the point along pixel (u,v)'s ray at camera depth zc
+function atDepth(c, u, v, zc){ const d = rayW(c, u, v); return {x: c.C.x + zc*d[0], f: c.C.f + zc*d[1], up: c.C.up + zc*d[2]}; }
+// Two cameras: where their lines of sight come closest. Returns the midpoint, how far
+// apart the lines pass (gap, feet: big = they're looking at different things) and the angle between them.
+function triangulate(c1, u1, v1, c2, u2, v2){
+  const p1 = [c1.C.x, c1.C.f, c1.C.up], p2 = [c2.C.x, c2.C.f, c2.C.up];
+  const d1 = norm3(rayW(c1, u1, v1)), d2 = norm3(rayW(c2, u2, v2));
+  const w0 = p1.map((v, i) => v - p2[i]), b = dot3(d1, d2), d = dot3(d1, w0), e = dot3(d2, w0), den = 1 - b*b;
+  if(den < 1e-6) return null;
+  const s1 = (b*e - d)/den, s2 = (e - b*d)/den; if(s1 <= 0 || s2 <= 0) return null;
+  const q1 = p1.map((v, i) => v + s1*d1[i]), q2 = p2.map((v, i) => v + s2*d2[i]);
+  return {p: {x: (q1[0]+q2[0])/2, f: (q1[1]+q2[1])/2, up: (q1[2]+q2[2])/2}, gap: Math.hypot(q1[0]-q2[0], q1[1]-q2[1], q1[2]-q2[2]),
+          angle: Math.acos(Math.min(1, Math.abs(b))), range: (s1 + s2)/2};
+}
+// --- old row-based ruler maths: still used for messages and for "sideways feet" without a gap
+const rulerScale = rl => Math.hypot(rl.b[0]-rl.a[0], rl.b[1]-rl.a[1]) / (+$('rlen').value || 1);
+const rulerRow = rl => (rl.a[1] + rl.b[1]) / 2;
+const rulerMidX = rl => (rl.a[0] + rl.b[0]) / 2;
+function rulerGeom(cam){
+  const r = cam.rulers; if(!r.far || !r.near) return null;
+  const y1 = rulerRow(r.far), y2 = rulerRow(r.near), s1 = rulerScale(r.far), s2 = rulerScale(r.near);
+  if(Math.abs(y2 - y1) < 5) return null;
+  return {y1, y2, s1, s2};
+}
+function floorPosLateral(cam, x, y, W){
+  const g = rulerGeom(cam); if(!g || g.s2 <= g.s1) return null;
+  const s = g.s1 + (g.s2 - g.s1) * (y - g.y1) / (g.y2 - g.y1);
+  return s > 0.5 ? {x: (x - W/2) / s, s} : null;
+}
+const rulerFloor = (c, cam, k) => cam.rulers[k] && pxToPlane(c, rulerMidX(cam.rulers[k]), rulerRow(cam.rulers[k]), 0);
+// A wall = two clicks where it meets the floor (in whichever camera). n = unit normal
+// pointing into the room (towards camera 1), so "distance from wall" is positive on our side.
+function wallWorld(w){
+  const c = calib(cams[w.cam || 0]); if(!c) return null;
   const A = pxToPlane(c, ...w.a, 0), B = pxToPlane(c, ...w.b, 0);
   if(!A || !B) return null;
   let nx = -(B.f - A.f), nf = B.x - A.x; const L = Math.hypot(nx, nf); if(L < 0.05) return null;
   nx /= L; nf /= L;
-  if(nx*(0 - A.x) + nf*(0 - A.f) < 0){ nx = -nx; nf = -nf; }    // face the camera
+  if(nx*(0 - A.x) + nf*(0 - A.f) < 0){ nx = -nx; nf = -nf; }
   return {ax:A.x, af:A.f, bx:B.x, bf:B.f, nx, nf};
 }
-const rulerScale = rl => Math.hypot(rl.b[0]-rl.a[0], rl.b[1]-rl.a[1]) / (+$('rlen').value || 1);
-const rulerRow = rl => (rl.a[1] + rl.b[1]) / 2;
-const rulerMidX = rl => (rl.a[0] + rl.b[0]) / 2;
-function rulerGeom(){
-  if(!rulers.far || !rulers.near) return null;
-  const y1 = rulerRow(rulers.far), y2 = rulerRow(rulers.near), s1 = rulerScale(rulers.far), s2 = rulerScale(rulers.near);
-  if(Math.abs(y2 - y1) < 5) return null;
-  const gap = parseFloat($('rgap').value);
-  // camera depth = f / scale, so the gap fixes f (strictly f / cos θ; corrected in calib)
-  const fe = (gap > 0 && s2 > s1) ? gap / (1/s1 - 1/s2) : null;
-  return {y1, y2, s1, s2, fe};
-}
-function calib(){
-  const g = rulerGeom(); if(!g || !g.fe) return null;
-  const cx = cv.width/2, cy = cv.height/2;
-  const yh = g.y1 - g.s1 * (g.y2 - g.y1) / (g.s2 - g.s1);   // horizon row, where scale → 0
-  const sin = (cy - yh) / g.fe;                              // sin θ = (centre − horizon) / fe
-  if(!(Math.abs(sin) < 0.99)) return null;
-  const th = Math.asin(sin), cos = Math.cos(th), f = g.fe * cos;
-  const h = (f / g.s2) * (cos * (g.y2 - cy) / f + sin);      // height from the near ruler's ray
-  if(!(h > 0)) return null;
-  return {f, th, sin, cos, h, cx, cy};
-}
-// pixel → viewing ray in camera axes (x right, y down the image, z out of the lens)
-const ray = (c, u, v) => [(u - c.cx)/c.f, (v - c.cy)/c.f, 1];
-// camera-axis point → world feet
-const camToWorld = (c, [x, y, z]) => ({x, up: c.h - c.cos*y - c.sin*z, f: c.cos*z - c.sin*y});
-// world feet → pixel (null if behind the camera)
-function worldToPx(c, p){
-  if(!p) return null;
-  const U = p.up - c.h, y = -c.cos*U - c.sin*p.f, z = c.cos*p.f - c.sin*U;
-  return z > 0.05 ? [c.cx + c.f*p.x/z, c.cy + c.f*y/z] : null;
-}
-// where the ray through pixel (u,v) crosses the horizontal plane at height H0
-function pxToPlane(c, u, v, H0){
-  const r = ray(c, u, v), den = c.cos*r[1] + c.sin;
-  if(den <= 1e-4) return null;                 // at or above the horizon
-  const t = (c.h - H0) / den; if(t <= 0) return null;
-  return camToWorld(c, [r[0]*t, r[1]*t, t]);
-}
-// Rulers without a gap: sideways feet only
-function floorPosLateral(x, y, W){
-  const g = rulerGeom(); if(!g || g.s2 <= g.s1) return null;
-  const s = g.s1 + (g.s2 - g.s1) * (y - g.y1) / (g.y2 - g.y1);
-  return s > 0.5 ? {x: (x - W/2) / s, s} : null;
-}
-const rulerFloor = (c, k) => rulers[k] && pxToPlane(c, rulerMidX(rulers[k]), rulerRow(rulers[k]), 0);
 
 function startRuler(which){
-  rulerPick = {which, pts:[]};
+  rulerPick = {which, pts:[], cam: null};
   $('rFar').classList.toggle('active', which==='far'); $('rNear').classList.toggle('active', which==='near');
   $('wAdd').classList.toggle('active', which==='wall');
   $('calStatus').textContent = which === 'wall'
-    ? 'Click a point where the wall meets the floor (left side of the wall).'
-    : `Click the LEFT end of the ${which} ruler in the video.`;
+    ? 'Click a point where the wall meets the floor, in either camera.'
+    : `Click end A of the ${which} ruler (the end on your LEFT when you stand at the near ruler facing the far one), in the camera you are setting up.`;
 }
-function rulerClick(x, y){
-  rulerPick.pts.push([x,y]);
+function rulerClick(cam, x, y){
+  if(rulerPick.cam && rulerPick.cam !== cam){ $('calStatus').textContent = `Finish in ${rulerPick.cam.name} first: click the second point in the same camera.`; return; }
+  rulerPick.cam = cam; rulerPick.pts.push([x,y]);
   const wall = rulerPick.which === 'wall';
   if(rulerPick.pts.length === 1){
-    $('calStatus').textContent = wall ? 'Now click another point further along the same wall–floor edge.' : `Now click the RIGHT end of the ${rulerPick.which} ruler.`;
+    $('calStatus').textContent = wall ? 'Now click another point further along the same wall–floor edge.' : `Now click end B of the ${rulerPick.which} ruler (the other end) in ${cam.name}.`;
     return;
   }
-  if(wall) walls.push({a:rulerPick.pts[0], b:rulerPick.pts[1]});
-  else { rulers[rulerPick.which] = {a:rulerPick.pts[0], b:rulerPick.pts[1]}; trail = []; mapTrail = []; }
+  if(wall) walls.push({cam: cam.i, a: rulerPick.pts[0], b: rulerPick.pts[1]});
+  else { cam.rulers[rulerPick.which] = {a: rulerPick.pts[0], b: rulerPick.pts[1]}; cam.rulers.size = [cam.cv.width, cam.cv.height]; resetTracking(); }
   rulerPick = null;
   $('rFar').classList.remove('active'); $('rNear').classList.remove('active'); $('wAdd').classList.remove('active');
   updateCalStatus();
 }
-function updateCalStatus(){
-  const g = rulerGeom();
-  if(!rulers.far && !rulers.near){ $('calStatus').textContent = 'No rulers marked.'; return; }
-  if(!g && rulers.far && rulers.near){ $('calStatus').textContent = 'Both rulers sit at about the same height in the picture. Put the far ruler further away, so it appears higher up in the video, then mark it again.'; return; }
-  if(!g){ $('calStatus').textContent = `${rulers.far ? 'Far' : 'Near'} ruler marked. Now mark the ${rulers.far ? 'near' : 'far'} one.`; return; }
-  if(g.s2 <= g.s1){ $('calStatus').textContent = 'The near ruler looks shorter than the far one. Did you swap them?'; return; }
-  let msg = `Rulers set ✓ Far ${g.s1.toFixed(0)} px/ft, near ${g.s2.toFixed(0)} px/ft.`;
-  const c = calib();
-  if(c){
-    const n = rulerFloor(c, 'near'), fa = rulerFloor(c, 'far');
-    msg += ` Camera is ${c.h.toFixed(2)} ft up, tilted ${deg(c.th)}° down. Near ruler ${n ? n.f.toFixed(2) : '?'} ft out, far ${fa ? fa.f.toFixed(2) : '?'} ft. Tape-measure these to check.`;
-    if(c.h > 15 || (fa && fa.f > 60)) msg += ' ⚠ Those numbers are too big for a room: re-check the gap and the ruler length.';
-  } else if(parseFloat($('rgap').value) > 0){
-    msg += ' Those rulers and that gap don’t fit a flat floor. Re-mark them or re-measure the gap.';
-  } else msg += ' Enter the gap between the rulers to turn on 3D.';
-  if(walls.length){
-    const ok = c ? walls.filter(w => wallWorld(c, w)).length : walls.length;
-    msg += ` ${walls.length} wall${walls.length > 1 ? 's' : ''} marked${c ? '' : ' (they work once the rulers + gap are set)'}.`;
-    if(ok < walls.length) msg += ` ${walls.length - ok} couldn’t be placed: click where the wall meets the floor, below the horizon.`;
+// How precise is this camera's calibration? Re-solve with every click nudged by up to 1 pixel
+// and see how far the camera's estimated position moves (feet).
+function calibPrecision(cam){
+  const base = calibRaw(cam); if(!base?.R) return null;
+  const jig = p => [p[0] + (Math.random()*2 - 1), p[1] + (Math.random()*2 - 1)];
+  let worst = 0;
+  for(let k = 0; k < 12; k++){
+    const r = cam.rulers, fake = {cv: cam.cv, rulers: {far: {a: jig(r.far.a), b: jig(r.far.b)}, near: {a: jig(r.near.a), b: jig(r.near.b)}}};
+    const q = calibRawSolve(fake); if(!q?.R) continue;
+    worst = Math.max(worst, Math.hypot(q.C[0] - base.C[0], q.C[1] - base.C[1], q.C[2] - base.C[2]));
   }
-  $('calStatus').textContent = msg;
+  return worst;
 }
-function drawRulers(W, H){
+function camStatus(cam){
+  const r = cam.rulers, g = rulerGeom(cam);
+  if(!r.far && !r.near) return null;
+  if(!g && r.far && r.near) return `${cam.name}: both rulers sit at about the same height in the picture. Put the far ruler further away and mark it again.`;
+  if(!g) return `${cam.name}: ${r.far ? 'far' : 'near'} ruler marked. Now mark the ${r.far ? 'near' : 'far'} one.`;
+  if(!(parseFloat($('rgap').value) > 0)) return `${cam.name}: rulers marked. Enter the gap between the rulers to turn on 3D.`;
+  const raw = calibRaw(cam);
+  if(raw?.bad === 'order') return `${cam.name}: these clicks don’t make sense yet. Either the ends were clicked in the wrong order (click end A, on your left facing the far ruler, first, for both rulers) or "far" and "near" were swapped. Re-mark them.`;
+  const c = calib(cam);
+  if(!c) return `${cam.name}: those clicks don’t fit a flat floor. Check the far ruler is straight out from the near one, parallel and centred, and re-mark.`;
+  const n = rulerFloor(c, cam, 'near'), fa = rulerFloor(c, cam, 'far');
+  const dn = n ? Math.hypot(n.x - c.C.x, n.f - c.C.f) : NaN, df = fa ? Math.hypot(fa.x - c.C.x, fa.f - c.C.f) : NaN;
+  let s = `${cam.name} ✓ ${c.h.toFixed(2)} ft up, tilted ${deg(c.tilt)}° down, near ruler ${dn.toFixed(1)} ft away, far ${df.toFixed(1)} ft.`;
+  if(cam.i > 0 || Math.abs(c.C.x) > 0.05) s += ` Sits ${Math.abs(c.C.x).toFixed(1)} ft ${c.C.x >= 0 ? 'right' : 'left'} and ${Math.abs(c.C.f).toFixed(1)} ft ${c.C.f >= 0 ? 'ahead of' : 'behind'} Cam 1, facing ${Math.abs(deg(c.yaw))}° ${c.yaw >= 0 ? 'right' : 'left'}.`;
+  if(c.h > 15 || df > 60) s += ' ⚠ Those numbers are too big for a room: re-check the gap and the ruler length.';
+  const prec = calibPrecision(cam);
+  if(prec != null && prec > 0.15){
+    const longRuler = (+$('rlen').value || 1) >= 2.5;
+    s += ` ⚠ ${cam.name}'s position is only known to about ±${prec.toFixed(2)} ft. ` + (longRuler
+      ? 'Click the ruler ends carefully, or put the rulers where this camera sees them bigger.'
+      : `Use a longer ruler (a yardstick, and set the length to 3) for accurate 3D${cams.filter(k => calib(k)).length > 1 ? ', especially with two cameras' : ''}.`);
+  }
+  return s;
+}
+function updateCalStatus(){
+  const lines = cams.map(camStatus).filter(Boolean);
+  const c0 = calib(cams[0]), c1 = calib(cams[1]);
+  if(c0 && c1){
+    const a = Math.abs(deg(c0.yaw - c1.yaw)), base = Math.hypot(c0.C.x - c1.C.x, c0.C.f - c1.C.f, c0.C.up - c1.C.up);
+    lines.push(a < 5 ? `Both cameras point almost the same way (${a}°), so triangulation will be weak. Angle Camera 2 in more.` : `Stereo ready: cameras ${base.toFixed(1)} ft apart, ${a}° between them.`);
+  }
+  if(walls.length){
+    const ok = walls.filter(w => wallWorld(w)).length;
+    lines.push(`${walls.length} wall${walls.length > 1 ? 's' : ''} marked.` + (ok < walls.length ? ` ${walls.length - ok} couldn’t be placed yet (that camera needs its rulers, or click where the wall meets the floor).` : ''));
+  }
+  $('calStatus').textContent = lines.length ? lines.join(' ') : 'No rulers marked. Mark them in each camera you use.';
+}
+function drawRulers(cam, W, H){
   ctx.save(); ctx.strokeStyle = '#c792ff'; ctx.fillStyle = '#c792ff'; ctx.lineWidth = 3;
   ctx.font = '600 18px "JetBrains Mono", monospace';
   for(const k of ['far','near']){
-    const rl = rulers[k]; if(!rl) continue;
+    const rl = cam.rulers[k]; if(!rl) continue;
     ctx.beginPath(); ctx.moveTo(...rl.a); ctx.lineTo(...rl.b);
     for(const p of [rl.a, rl.b]){ ctx.moveTo(p[0], p[1]-10); ctx.lineTo(p[0], p[1]+10); }
     ctx.stroke();
     ctx.fillText(`${$('rlen').value} ft (${k})`, Math.min(rl.a[0], rl.b[0]), Math.min(rl.a[1], rl.b[1]) - 14);
+    ctx.font = '700 14px "JetBrains Mono", monospace'; ctx.fillText('A', rl.a[0] - 5, rl.a[1] + 26); ctx.fillText('B', rl.b[0] - 5, rl.b[1] + 26);
+    ctx.font = '600 18px "JetBrains Mono", monospace';
   }
-  if(rulerPick) for(const p of rulerPick.pts){ ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fill(); }
+  if(rulerPick && rulerPick.cam === cam) for(const p of rulerPick.pts){ ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fill(); }
   ctx.restore();
-  const c = calib();
+  const c = calib(cam);
   for(const w of walls){
+    const ww = wallWorld(w); if(!ww || !c) continue;
+    const pts = [worldToPx(c, {x:ww.ax, up:0, f:ww.af}), worldToPx(c, {x:ww.bx, up:0, f:ww.bf}), worldToPx(c, {x:ww.bx, up:3, f:ww.bf}), worldToPx(c, {x:ww.ax, up:3, f:ww.af})];
+    if(pts.some(p => !p)) continue;
     ctx.save(); ctx.strokeStyle = '#ff7ad9'; ctx.fillStyle = 'rgba(255,122,217,.10)'; ctx.lineWidth = 3;
-    const ww = c && wallWorld(c, w), top = ww && [worldToPx(c, {x:ww.ax, up:3, f:ww.af}), worldToPx(c, {x:ww.bx, up:3, f:ww.bf})];
-    if(top && top[0] && top[1]){ ctx.beginPath(); ctx.moveTo(...w.a); ctx.lineTo(...w.b); ctx.lineTo(...top[1]); ctx.lineTo(...top[0]); ctx.closePath(); ctx.fill(); }
-    ctx.beginPath(); ctx.moveTo(...w.a); ctx.lineTo(...w.b); ctx.stroke();
-    ctx.font = '600 16px "JetBrains Mono", monospace'; ctx.fillStyle = '#ff7ad9'; ctx.fillText('wall', (w.a[0]+w.b[0])/2 - 18, (w.a[1]+w.b[1])/2 - 10);
+    ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(...p) : ctx.moveTo(...p)); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(...pts[0]); ctx.lineTo(...pts[1]); ctx.stroke();
+    ctx.font = '600 16px "JetBrains Mono", monospace'; ctx.fillStyle = '#ff7ad9'; ctx.fillText('wall', (pts[0][0]+pts[1][0])/2 - 18, (pts[0][1]+pts[1][1])/2 - 10);
     ctx.restore();
   }
-  if($('showmap').checked && c) drawViews(W, H, c);
+  if($('showmap').checked && c && cam === primary()) drawViews(W, H, c, cam);
 }
 
-// ---- Top view + side view -----------------------------------------------
-function drawViews(W, H, c){
+// ---- Top view + side view (room frame: Camera 1 at the bottom, looking up) --
+function drawViews(W, H, c, cam){
   const size = Math.round(H*0.34), pad = 12, gapPx = 10, sw = Math.round(size*1.4);
   const y0 = H - size - pad, tx0 = W - size - pad, sx0 = tx0 - gapPx - sw;
-  const nr = rulerFloor(c, 'near'), fr = rulerFloor(c, 'far');
+  const camsC = cams.map(calib).filter(Boolean);
+  const nr = rulerFloor(c, cam, 'near'), fr = rulerFloor(c, cam, 'far');
   const pathW = viewPred ? viewPred.path : [];
-  let maxF = Math.max(fr ? fr.f*1.25 : 4, 3), maxUp = Math.max(c.h*1.4, 3), maxX = 1;
+  let fMin = Math.min(0, ...camsC.map(k => k.C.f)) - 0.5, maxF = Math.max(fr ? fr.f*1.25 : 4, 3), maxUp = Math.max(...camsC.map(k => k.h*1.4), 3), maxX = Math.max(1, ...camsC.map(k => Math.abs(k.C.x) + 0.5));
   for(const p of mapTrail.concat(pathW)){ maxF = Math.max(maxF, p.f*1.08); maxUp = Math.max(maxUp, p.up*1.15); maxX = Math.max(maxX, Math.abs(p.x)); }
   maxF = Math.min(maxF, (fr ? fr.f : 10) * 3);
   const panel = (x0, w, title) => {
@@ -499,59 +660,65 @@ function drawViews(W, H, c){
   const cross = (x, y) => { ctx.beginPath(); ctx.moveTo(x-5, y-5); ctx.lineTo(x+5, y+5); ctx.moveTo(x+5, y-5); ctx.lineTo(x-5, y+5); ctx.stroke(); };
   const poly = (pts, col, wdt) => { ctx.strokeStyle = col; ctx.lineWidth = wdt; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke(); };
 
-  // TOP VIEW: camera at the bottom middle, looking up the panel
+  // TOP VIEW
   ctx.save(); ctx.beginPath(); ctx.rect(tx0, y0, size, size); ctx.clip();
   panel(tx0, size, 'TOP VIEW · 1 ft grid');
-  const sc = Math.min((size - 34) / maxF, (size/2 - 10) / Math.max(maxX, maxF*0.4));
-  const camX = tx0 + size/2, camY = y0 + size - 12, P = p => [camX + p.x*sc, camY - p.f*sc];
+  const span = maxF - fMin, sc = Math.min((size - 34) / span, (size/2 - 10) / Math.max(maxX, span*0.4));
+  const camX = tx0 + size/2, baseY = y0 + size - 12, P = p => [camX + p.x*sc, baseY - (p.f - fMin)*sc];
   ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1;
-  for(let z = 1; z < maxF; z++){ const y = camY - z*sc; ctx.beginPath(); ctx.moveTo(tx0, y); ctx.lineTo(tx0+size, y); ctx.stroke(); }
+  for(let z = Math.ceil(fMin); z < maxF; z++){ const y = baseY - (z - fMin)*sc; ctx.beginPath(); ctx.moveTo(tx0, y); ctx.lineTo(tx0+size, y); ctx.stroke(); }
   ctx.strokeStyle = '#c792ff'; ctx.lineWidth = 2; const half = (+$('rlen').value || 1)/2;
-  for(const r of [nr, fr]) if(r){ ctx.beginPath(); ctx.moveTo(...P({x:r.x-half, f:r.f})); ctx.lineTo(...P({x:r.x+half, f:r.f})); ctx.stroke(); }
+  const ruler = (k) => { const rl = cam.rulers[k]; if(!rl) return; const a = pxToPlane(c, ...rl.a, 0), b = pxToPlane(c, ...rl.b, 0); if(a && b){ ctx.beginPath(); ctx.moveTo(...P(a)); ctx.lineTo(...P(b)); ctx.stroke(); } };
+  ruler('near'); ruler('far');
   ctx.strokeStyle = '#ff7ad9'; ctx.lineWidth = 3;
-  for(const ww of walls.map(w => wallWorld(c, w)).filter(Boolean)){     // walls, extended across the panel
+  for(const ww of walls.map(wallWorld).filter(Boolean)){
     const dx = ww.bx - ww.ax, df = ww.bf - ww.af, L = Math.hypot(dx, df), k = 60 / L;
     ctx.beginPath(); ctx.moveTo(...P({x: ww.ax - dx*k, f: ww.af - df*k})); ctx.lineTo(...P({x: ww.bx + dx*k, f: ww.bf + df*k})); ctx.stroke();
   }
-  for(const p of mapTrail){ const [x, y] = P(p); ctx.fillStyle = '#ffb020'; ctx.fillRect(x-1.5, y-1.5, 3, 3); }
+  for(const p of mapTrail){ const [x, y] = P(p); ctx.fillStyle = p.stereo ? '#ffd166' : '#ffb020'; ctx.fillRect(x-1.5, y-1.5, 3, 3); }
   if(viewPred){
     poly(viewPred.path.map(P), '#3aa0ff', 3);
     ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
-    for(const h of viewPred.wallHits){ const [x, y] = P(h); cross(x, y); }
+    for(const hh of viewPred.wallHits){ const [x, y] = P(hh); cross(x, y); }
     for(const q of viewPred.ticks){ const [x, y] = P(q); dot(x, y, 3, '#3aa0ff'); }
-    ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
     for(const b of viewPred.bounces){ const [x, y] = P(b); cross(x, y); }
   }
   if(mapTrail.length){ const [x, y] = P(mapTrail[mapTrail.length-1]); dot(x, y, 6, '#3cff8f'); }
-  ctx.fillStyle = '#dfe7ea'; ctx.beginPath(); ctx.moveTo(camX, camY-8); ctx.lineTo(camX-7, camY+6); ctx.lineTo(camX+7, camY+6); ctx.fill();
+  for(const k of camsC){                                  // each camera: a triangle pointing where it looks
+    const [x, y] = P(k.C), a = k.yaw;
+    ctx.fillStyle = k.cam === 0 ? '#dfe7ea' : '#ffb020'; ctx.beginPath();
+    ctx.moveTo(x + 10*Math.sin(a), y - 10*Math.cos(a)); ctx.lineTo(x - 7*Math.cos(a) - 5*Math.sin(a), y - 7*Math.sin(a) + 5*Math.cos(a)); ctx.lineTo(x + 7*Math.cos(a) - 5*Math.sin(a), y + 7*Math.sin(a) + 5*Math.cos(a)); ctx.fill();
+    ctx.font = '600 10px "JetBrains Mono", monospace'; ctx.fillText(String(k.cam + 1), x + 8, y + 12);
+  }
   ctx.restore();
 
-  // SIDE VIEW: distance out along the floor → right, height → up; camera on the left
+  // SIDE VIEW (distance out → right, height → up)
   ctx.save(); ctx.beginPath(); ctx.rect(sx0, y0, sw, size); ctx.clip();
   panel(sx0, sw, 'SIDE VIEW · height vs distance');
-  const ss = Math.min((sw - 30) / maxF, (size - 40) / maxUp);
-  const ox = sx0 + 16, oy = y0 + size - 14, S = p => [ox + p.f*ss, oy - p.up*ss];
+  const ss = Math.min((sw - 30) / span, (size - 40) / maxUp);
+  const ox = sx0 + 16, oy = y0 + size - 14, S = p => [ox + (p.f - fMin)*ss, oy - p.up*ss];
   ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1;
   for(let z = 1; z < maxUp; z++){ const y = oy - z*ss; ctx.beginPath(); ctx.moveTo(sx0, y); ctx.lineTo(sx0+sw, y); ctx.stroke(); }
-  for(let z = 1; z < maxF; z++){ const x = ox + z*ss; ctx.beginPath(); ctx.moveTo(x, y0+22); ctx.lineTo(x, oy); ctx.stroke(); }
-  ctx.strokeStyle = '#7f8f96'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx0, oy); ctx.lineTo(sx0+sw, oy); ctx.stroke();   // floor
+  for(let z = Math.ceil(fMin); z < maxF; z++){ const x = ox + (z - fMin)*ss; ctx.beginPath(); ctx.moveTo(x, y0+22); ctx.lineTo(x, oy); ctx.stroke(); }
+  ctx.strokeStyle = '#7f8f96'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx0, oy); ctx.lineTo(sx0+sw, oy); ctx.stroke();
   ctx.strokeStyle = '#c792ff'; for(const r of [nr, fr]) if(r){ const [x] = S({f:r.f, up:0}); ctx.beginPath(); ctx.moveTo(x, oy-6); ctx.lineTo(x, oy+6); ctx.stroke(); }
-  const [cxS, cyS] = S({f:0, up:c.h});                                   // camera and its view direction
-  ctx.strokeStyle = 'rgba(223,231,234,.35)'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(cxS, cyS); ctx.lineTo(cxS + Math.cos(c.th)*sw, cyS + Math.sin(c.th)*sw); ctx.stroke(); ctx.setLineDash([]);
-  dot(cxS, cyS, 5, '#dfe7ea');
+  for(const k of camsC){
+    const [cxS, cyS] = S(k.C);
+    ctx.strokeStyle = 'rgba(223,231,234,.35)'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(cxS, cyS); ctx.lineTo(cxS + Math.cos(k.tilt)*sw, cyS + Math.sin(k.tilt)*sw); ctx.stroke(); ctx.setLineDash([]);
+    dot(cxS, cyS, 5, k.cam === 0 ? '#dfe7ea' : '#ffb020');
+  }
   ctx.strokeStyle = 'rgba(255,122,217,.7)'; ctx.lineWidth = 3;
-  for(const ww of walls.map(w => wallWorld(c, w)).filter(Boolean)){     // a wall crossing straight ahead shows as a vertical line
+  for(const ww of walls.map(wallWorld).filter(Boolean)){
     const df = ww.bf - ww.af, dx = ww.bx - ww.ax;
     if(Math.abs(dx) > 1e-6){ const tt = -ww.ax/dx; if(tt > -3 && tt < 4){ const [x] = S({f: ww.af + df*tt, up:0}); ctx.beginPath(); ctx.moveTo(x, oy); ctx.lineTo(x, y0+22); ctx.stroke(); } }
   }
-  for(const p of mapTrail){ const [x, y] = S(p); ctx.fillStyle = '#ffb020'; ctx.fillRect(x-1.5, y-1.5, 3, 3); }
+  for(const p of mapTrail){ const [x, y] = S(p); ctx.fillStyle = p.stereo ? '#ffd166' : '#ffb020'; ctx.fillRect(x-1.5, y-1.5, 3, 3); }
   if(viewPred){
     poly(viewPred.path.map(S), '#3aa0ff', 3);
     ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
-    for(const h of viewPred.wallHits){ const [x, y] = S(h); cross(x, y); }
+    for(const hh of viewPred.wallHits){ const [x, y] = S(hh); cross(x, y); }
     for(const q of viewPred.ticks){ const [x, y] = S(q); dot(x, y, 3, '#3aa0ff'); }
-    ctx.strokeStyle = '#3aa0ff'; ctx.lineWidth = 2;
     for(const b of viewPred.bounces){ const [x, y] = S({f:b.f, up:0}); cross(x, y); }
   }
   if(mapTrail.length){ const [x, y] = S(mapTrail[mapTrail.length-1]); dot(x, y, 6, '#3cff8f'); }
@@ -561,47 +728,67 @@ $('rFar').onclick = () => startRuler('far');
 $('rNear').onclick = () => startRuler('near');
 $('wAdd').onclick = () => startRuler('wall');
 $('wClear').onclick = () => { walls = []; updateCalStatus(); };
-$('rReset').onclick = () => { rulers = {far:null, near:null}; rulerPick = null; trail = []; mapTrail = []; updateCalStatus(); };
-$('rgap').oninput = $('rlen').oninput = $('balld').oninput = () => { trail = []; mapTrail = []; updateCalStatus(); };
-$('model').onchange = () => { trail = []; mapTrail = []; };
+$('rReset').onclick = () => { for(const c of cams) c.rulers = {far:null, near:null}; rulerPick = null; resetTracking(); updateCalStatus(); };
+$('rgap').oninput = $('rlen').oninput = $('balld').oninput = () => { resetTracking(); updateCalStatus(); };
+$('model').onchange = () => resetTracking();
 
 $('ahead').oninput = e => { $('aheadv').textContent = $('predt').textContent = (e.target.value/100).toFixed(2); };
 $('win').oninput = e => $('winv').textContent = e.target.value;
 $('minspd').oninput = e => $('minspdv').textContent = e.target.value;
 
-// Run once per NEW camera frame, stamped with when the camera took it. (Plain
-// requestAnimationFrame can process the same frame twice or stamp it late,
-// which makes speeds wrong.) Falls back to requestAnimationFrame if unsupported.
+// =========================================================================
+// Frame loop: each camera runs once per NEW frame, stamped with when that camera
+// took it (live) or the video's own clock (replay).
+// =========================================================================
 const hasVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
-function nextFrame(){ hasVFC ? vid.requestVideoFrameCallback(loop) : requestAnimationFrame(() => loop()); }
-function loop(_now, meta){
-  if(!stream && !Learn.isReplay()) return;
-  // live camera: when the camera took the frame · replay: the video's own clock (immune to playback stutter)
-  const frameT = meta ? (Learn.isReplay() ? Learn.replayClock(meta.mediaTime) : (meta.captureTime || meta.expectedDisplayTime || performance.now())) : performance.now();
-  if(vid.readyState >= 2){
-    const W = vid.videoWidth, H = vid.videoHeight;
-    if(cv.width!==W){cv.width=W;cv.height=H;}
-    ctx.save();
-    if($('mirror').checked){ctx.translate(W,0);ctx.scale(-1,1);}
-    ctx.drawImage(vid,0,0,W,H); ctx.restore();
-    if(samples.length) detect(W, H, frameT); else Learn.onFrame({t: frameT, W, H, locked: false});
-    drawCross(W,H);
-    drawRulers(W,H);
-    Learn.afterDraw(frameT);
-    frames++;
-    const now = performance.now();
-    if(now - fpsT > 500){ $('fps').textContent = (frames*1000/(now-fpsT)).toFixed(0) + ' fps'; frames=0; fpsT=now; }
-  }
-  nextFrame();
+function startLoop(cam){ if(cam.looping) return; cam.looping = true; nextFrame(cam); }
+function nextFrame(cam){
+  if(!isActive(cam)){ cam.looping = false; return; }
+  hasVFC ? cam.vid.requestVideoFrameCallback((n, m) => loop(cam, m)) : requestAnimationFrame(() => loop(cam));
+}
+function loop(cam, meta){
+  if(!isActive(cam)){ cam.looping = false; return; }
+  const frameT = meta ? (cam.replay ? Learn.replayClock(meta.mediaTime) : (meta.captureTime || meta.expectedDisplayTime || performance.now())) : performance.now();
+  if(cam.vid.readyState >= 2) processFrame(cam, frameT);
+  nextFrame(cam);
+}
+// One camera frame. `source` defaults to the camera's video (tests pass a canvas).
+function processFrame(cam, frameT, source = cam.vid){
+  const W = source.videoWidth || source.width, H = source.videoHeight || source.height;
+  use(cam);
+  if(cv.width !== W){ cv.width = W; cv.height = H; }
+  ctx.save(); if($('mirror').checked){ ctx.translate(W,0); ctx.scale(-1,1); } ctx.drawImage(source, 0, 0, W, H); ctx.restore();
+  trackFrame(cam, W, H, frameT - (cam.clock || 0));          // camera 2's clock, corrected by auto-sync
+  drawCross(W,H); drawRulers(cam, W, H);
+  if(cam === primary()) Learn.afterDraw(frameT, activeCams().filter(c => !c.cv.hidden).map(c => c.cv));
+  cam.frames++;
+  const now = performance.now();
+  if(now - cam.fpsT > 500){ cam.fps = Math.round(cam.frames*1000/(now - cam.fpsT)); cam.frames = 0; cam.fpsT = now; updateCameraCard(); }
+}
+function updateCameraCard(){
+  const a = activeCams();
+  txt('fps', a.length ? a.map(c => `${c.fps} fps`).join(' · ') : '–');
+  const st = a.length > 1 ? (F.kind === 'stereo' && performance.now() - F.lastAccept < 300 ? `stereo: rays meet within ${F.gap.toFixed(2)} ft` : 'stereo when both see it') : (a[0]?.res || ' ');
+  const res = a.map(c => c.res).filter(Boolean).join(' · ');
+  const sync = a.length > 1 && cams[1].clockSet ? ` · cam 2 clock ${cams[1].clock >= 0 ? '+' : ''}${Math.round(cams[1].clock)} ms (auto-synced)` : '';
+  txt('res', a.length > 1 ? (res ? `${res} · ${st}${sync}` : st + sync) : st);
+}
+function updateHud(){
+  const a = activeCams(); if(!a.length) return;
+  const fused = performance.now() - F.lastAccept < 300 && F.trail.length;
+  $('hud').textContent = a.map(c => `${c.name}: ${c.state}`).join('  ·  ') + (a.length > 1 && fused ? `  ·  3D from ${F.kind === 'stereo' ? 'BOTH cameras' : 'one camera'}` : '');
 }
 
-// Detection on a downscaled copy for speed (1/4 size)
-function detect(W, H, frameT){
+// =========================================================================
+// Find the target in one camera's frame (colour → blobs → shape → library check)
+// =========================================================================
+function findTarget(cam, W, H, t){
   const s = 4, w = (W/s)|0, h = (H/s)|0;
   work.width = w; work.height = h;
   wctx.drawImage(cv,0,0,w,h);
-  if(snap.width !== W){ snap.width = W; snap.height = H; Learn.setSnap(snap); }
-  sctx.drawImage(cv, 0, 0);
+  if(cam.snap.width !== W){ cam.snap.width = W; cam.snap.height = H; }
+  cam.sctx.drawImage(cv, 0, 0);
+  Learn.setSnap(cam.snap, cam.i);
   const img = wctx.getImageData(0,0,w,h), d = img.data;
   const tol = +$('tol').value, N = w*h, k = +$('strict').value/100;
 
@@ -615,8 +802,7 @@ function detect(W, H, frameT){
       if(dh < tol && ss > Math.max(ts*k, 0.2) && vv > Math.max(tv*k*0.45, 0.12)){ hit[p]=1; break; }
     }
   }
-
-  // 2. Merge: grow each hit by `gap` cells so thin wires join into one blob
+  // 2. Merge: grow each hit by `gap` cells so thin parts join into one blob
   const gap = +$('merge').value;
   let grown = hit;
   if(gap > 0){
@@ -626,9 +812,7 @@ function detect(W, H, frameT){
     for(let x=0;x<w;x++){ let run=-1e9; for(let y=0;y<h;y++){ if(tmp[y*w+x]) run=y; if(y-run<=gap) grown[y*w+x]=1; }
                           run=1e9; for(let y=h-1;y>=0;y--){ if(tmp[y*w+x]) run=y; if(run-y<=gap) grown[y*w+x]=1; } }
   }
-
-  // 3. Find every connected blob. Box and counts use real colour hits only
-  //    (the merge padding would make a ball look bigger, i.e. closer).
+  // 3. Connected blobs (box and counts from real colour hits only)
   const label = new Int32Array(N), stack = [], comps = [];
   let id = 0;
   for(let p=0;p<N;p++){
@@ -645,11 +829,7 @@ function detect(W, H, frameT){
     }
     if(cnt) comps.push({id,cnt,sx,sy,x0,y0,x1,y1});
   }
-
-  // 4. Shape of a blob. Fill each row between its first and last hit (so a basketball's
-  //    dark seams don't punch holes), then take second moments of that shape:
-  //    centre, diameter = shortest axis (sub-pixel, unaffected by motion blur), and
-  //    roundness = short axis ÷ long axis (1 = circle, a leg ≈ 0.3).
+  // 4. Shape: filled rows → second moments → centre, diameter (shortest axis), roundness
   const shapeOf = b => {
     let S0=0, Sx=0, Sy=0, Sxx=0, Syy=0, Sxy=0;
     for(let y=b.y0; y<=b.y1; y++){
@@ -661,19 +841,15 @@ function detect(W, H, frameT){
     }
     if(S0 <= 4) return null;
     const mx=Sx/S0, my=Sy/S0;
-    const cxx=Sxx/S0-mx*mx+1/12, cyy=Syy/S0-my*my+1/12, cxy=Sxy/S0-mx*my;   // +1/12: spread inside each cell
+    const cxx=Sxx/S0-mx*mx+1/12, cyy=Syy/S0-my*my+1/12, cxy=Sxy/S0-mx*my;
     const half=(cxx+cyy)/2, rad=Math.sqrt(((cxx-cyy)/2)**2 + cxy*cxy);
     const lmin=Math.max(half-rad, 0), lmax=half+rad;
-    return {u:(mx+0.5)*s, v:(my+0.5)*s, d:4*Math.sqrt(lmin)*s,          // disc: variance = r²/4
-            round: lmax > 0 ? Math.sqrt(lmin/lmax) : 0, fill: b.cnt/S0};
+    return {u:(mx+0.5)*s, v:(my+0.5)*s, d:4*Math.sqrt(lmin)*s, round: lmax > 0 ? Math.sqrt(lmin/lmax) : 0, fill: b.cnt/S0};
   };
-
-  // 5. Pick the target.
-  //    Ball mode: only round, solid blobs (rejects legs, arms and ragged floor patches).
-  //    Every mode: prefer the blob nearest to where last frame's prediction says the
-  //    target should be now. A different blob somewhere else only takes over if the
-  //    real target stays missing for several frames, so the lock can't flick to a leg.
-  const t = frameT ?? performance.now();
+  // 5. Pick the target. Ball mode: only round, solid blobs. Every mode: prefer the blob
+  //    nearest to where the target should be NOW. With calibrated cameras that comes from
+  //    the shared 3D prediction, so each camera knows where to look even if only the
+  //    OTHER camera saw the ball last.
   const model = $('model').value, wantRound = model === 'ball';
   const minCells = +$('minpx').value / (s*s);
   let cands = comps.filter(b => b.cnt >= minCells);
@@ -682,157 +858,288 @@ function detect(W, H, frameT){
     b.shape = shapeOf(b);
     b.at = wantRound && b.shape ? [b.shape.u, b.shape.v] : [b.sx/b.cnt*s, b.sy/b.cnt*s];
   }
-  // a ball scores ~0.9+ even with motion blur and seams; legs ≈ 0.3, floor patches ≈ 0.5
   if(wantRound) cands = cands.filter(b => b.shape && b.shape.fill >= 0.75 && b.shape.round >= (b.edge ? 0.35 : 0.7));
-  let expect = null;
-  if(track && t - track.t < 400){
-    const p = track.at((t - track.t)/1000);
-    if(p) expect = {x:p[0], y:p[1], r: Math.max(track.d*3, W*0.12)};
+  let expect = null; const c = calib(cam);
+  if(c && F.pr && F.pr.atW && t - F.t < 400){
+    const p = worldToPx(c, F.pr.atW(Math.max(0, (t - F.t)/1000)));
+    if(p) expect = {x: p[0], y: p[1], r: Math.max((cam.last?.d || 40)*3, W*0.12)};
   }
-  // fresh pick: in ball mode the roundest, most solid blob wins; otherwise the biggest
+  if(!expect && cam.track && t - cam.track.t < 400){
+    const p = cam.track.at((t - cam.track.t)/1000);
+    if(p) expect = {x:p[0], y:p[1], r: Math.max(cam.track.d*3, W*0.12)};
+  }
   const score = b => wantRound ? b.shape.round * b.shape.fill + b.cnt * 1e-6 : b.cnt;
   const biggest = () => cands.reduce((m, b) => !m || score(b) > score(m) ? b : m, null);
   let best = null, holding = false, fresh = !expect, switched = false;
   if(expect){
     let bd = Infinity;
     for(const b of cands){ const dd = Math.hypot(b.at[0]-expect.x, b.at[1]-expect.y); if(dd < expect.r && dd < bd){ bd = dd; best = b; } }
-    if(!best && cands.length){ if(++holdMiss < 6) holding = true; else { best = biggest(); fresh = true; switched = true; } }
+    // If the OTHER camera is feeding the shared 3D track right now, this camera probably just
+    // can't see the ball (blocked): wait longer before grabbing something else of the same colour.
+    const otherHasIt = !!c && t - (F.lastByCam?.[1 - cam.i] ?? -1e9) < 150;
+    if(!best && cands.length){ if(++cam.holdMiss < (otherHasIt ? 45 : 6)) holding = true; else { best = biggest(); fresh = true; switched = true; } }
   } else best = biggest();
-
-  // 6. Double-check with the example library: colour and shape found it, but does it
-  //    LOOK like the examples? A fresh pick tests the top 3 candidates; a held lock is
-  //    re-checked 4 times a second and dropped after two fails in a row.
+  // 6. Library double-check (per camera)
   const passed = new Set(cands);
-  const vd = Learn.check({best, cands, fresh, s, t, rank: score});
+  const vd = Learn.check({best, cands, fresh, s, t, rank: score, key: cam.i});
   best = vd.best;
-  if(vd.dropped){ track = null; last = null; }
-  if(best) holdMiss = 0;
-
+  if(vd.dropped){ cam.track = null; cam.last = null; }
+  if(best) cam.holdMiss = 0;
   if($('mask').checked){
-    // white = colour match, light grey = chosen target, dark grey = merged area / rejected blobs
     for(let p=0,i=0;p<N;p++,i+=4){
-      const c = hit[p] ? (best && label[p]===best.id ? 255 : 150) : (best && label[p]===best.id) ? 110 : grown[p] ? 45 : 0;
-      d[i]=d[i+1]=d[i+2]=c;
+      const v = hit[p] ? (best && label[p]===best.id ? 255 : 150) : (best && label[p]===best.id) ? 110 : grown[p] ? 45 : 0;
+      d[i]=d[i+1]=d[i+2]=v;
     }
     wctx.putImageData(img,0,0); ctx.imageSmoothingEnabled=false; ctx.drawImage(work,0,0,W,H);
   }
-  // show rejected candidates as thin red boxes, so you can see what was ignored
   ctx.strokeStyle='rgba(255,90,79,.55)'; ctx.lineWidth=1.5;
   for(const b of comps) if(b !== best && b.cnt >= minCells) ctx.strokeRect(b.x0*s, b.y0*s, (b.x1-b.x0+1)*s, (b.y1-b.y0+1)*s);
-
-  if(best){
-    const n = best.cnt, cx = (best.sx/n)*s, cy = (best.sy/n)*s, r = Math.sqrt(n/Math.PI)*s;
-    const bx0 = best.x0*s, by0 = best.y0*s, bw = (best.x1-best.x0+1)*s, bh = (best.y1-best.y0+1)*s;
-    const edge = best.edge;                                   // cut off by the frame
-    ctx.strokeStyle='rgba(60,255,143,.6)'; ctx.lineWidth=2; ctx.setLineDash([8,6]);
-    ctx.strokeRect(bx0, by0, bw, bh); ctx.setLineDash([]);
-
-    const ball = wantRound && best.shape;
-    const [u, v] = best.at;
-    // Start a fresh track after losing the target or a big jump, so old points can't drag the fit
-    let jumped = switched;
-    if(!last || t - last.t > 200 || Math.hypot(u - last.x, v - last.y) > W*0.25){
-      if(last && t - last.t <= 200) jumped = true;                 // moved to a different blob, not just re-found
-      trail = []; mapTrail = []; trackId++; trackStart = t;
-    }
-    const dPx = ball ? best.shape.d : Math.min(bw, bh);
-    trail.push({x:u, y:v, t, d:dPx, edge}); if(trail.length > 240) trail.shift();
-    last = {x:u, y:v, t};
-
-    const c = calib(), ahead = +$('ahead').value/100;
-    const pr = predict({model, c, t, W, ahead, u, v});
-    track = {at: pr.at, t, d: dPx};
-    const p0 = pr.at(0) || [u, v], p5 = pr.at(0.05);
-    const pxV = p5 ? [(p5[0]-p0[0])/0.05, (p5[1]-p0[1])/0.05] : [0, 0];
-    const moving = Math.hypot(...pxV) > +$('minspd').value;
-
-    viewPred = null;
-    if(pr.atW && moving && $('pred').checked){
-      const path = [], ticks = [];
-      for(let i = 0; i <= 40; i++) path.push(pr.atW(ahead*i/40));
-      for(let k = 0.25; k < ahead; k += 0.25) ticks.push(pr.atW(k));
-      viewPred = {path, ticks, bounces: pr.bounces || [], wallHits: pr.wallHits || []};
-    }
-    if(pr.nowW){ mapTrail.push(pr.nowW); if(mapTrail.length > 200) mapTrail.shift(); }
-
-    if($('pred').checked && moving) drawPrediction(pr, ahead, c);
-    if(pr.mode === 'ball') drawShadow(pr, c);
-    if($('trail').checked){
-      ctx.strokeStyle='rgba(255,176,32,.8)'; ctx.lineWidth=3; ctx.beginPath();
-      trail.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.stroke();
-    }
-    ctx.strokeStyle='#3cff8f'; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(u,v,Math.max(ball ? dPx/2 : r, 8),0,Math.PI*2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(u-12,v); ctx.lineTo(u+12,v); ctx.moveTo(u,v-12); ctx.lineTo(u,v+12); ctx.stroke();
-    renderStats({pr, c, u, v, W, H, ahead, model, pxV, d: dPx, r, moving});
-    $('hud').textContent = `LOCK  x ${(u-W/2)|0}  y ${(H/2-v)|0}`;
-    const boxOf = b => ({cx: (b.x0 + b.x1 + 1)/2*s, cy: (b.y0 + b.y1 + 1)/2*s, size: Math.max(b.x1 - b.x0 + 1, b.y1 - b.y0 + 1)*s*1.3});
-    const others = comps.filter(b => b !== best && b.cnt >= minCells);
-    const speed = pr.velW ? Math.hypot(pr.velW.vx, pr.velW.vu, pr.velW.vf) : Math.hypot(...pxV);
-    Learn.onFrame({t, W, H, locked: true, holding: false, jumped, trackId, trackAge: t - trackStart, u, v, d: dPx,
-      box: boxOf(best), mode: pr.mode, nowW: pr.nowW || null, speed, pr, ahead, verdict: vd.v, ncands: cands.length,
-      rejected: others.map(b => ({...boxOf(b), reason: passed.has(b) ? 'decoy' : 'shape'})),
-      blobs: comps.filter(b => b.cnt >= minCells).map(boxOf)});
-  } else if(holding){
-    // something else is visible but the real target vanished: wait before switching
-    $('hud').textContent = `HOLDING (ignoring a jump, ${holdMiss}/6)`;
-    Learn.onFrame({t, W, H, locked: false, holding: true});
-  } else {
-    clearStats();
-    const tooMuch = comps.some(b => b.cnt > N*0.25);
-    $('hud').textContent = tooMuch ? 'SEARCHING · the colour matches too much of the picture: raise Strictness or lower Tolerance'
-      : vd.waiting || vd.rejectedAll ? 'SEARCHING (library said no to what it saw)' : 'SEARCHING'; last=null; track=null;
-    const boxOf = b => ({cx: (b.x0 + b.x1 + 1)/2*s, cy: (b.y0 + b.y1 + 1)/2*s, size: Math.max(b.x1 - b.x0 + 1, b.y1 - b.y0 + 1)*s*1.3});
-    Learn.onFrame({t, W, H, locked: false, holding: false, waiting: vd.waiting, blobs: comps.filter(b => b.cnt >= minCells).map(boxOf)});
-  }
+  const boxOf = b => ({cx: (b.x0 + b.x1 + 1)/2*s, cy: (b.y0 + b.y1 + 1)/2*s, size: Math.max(b.x1 - b.x0 + 1, b.y1 - b.y0 + 1)*s*1.3});
+  const blobs = comps.filter(b => b.cnt >= minCells);
+  Learn.setBlobs(cam.i, blobs.map(boxOf));
+  return {best, holding, vd, comps, cands, passed, minCells, s, N, switched, boxOf, blobs, wantRound,
+          tooMuch: comps.some(b => b.cnt > N*0.25)};
 }
 
+// =========================================================================
+// Fusion: turn one camera's detection into a 3D point and add it to the shared track
+// =========================================================================
+const ballD = () => (+$('balld').value || 9.4) / 12;
+// one camera alone: distance from the ball's size (anywhere) and from the floor (if rolling)
+function ballWorldMono(c, p, D){
+  if(p.edge || p.d < 4) return null;
+  return {air: atDepth(c, p.u, p.v, c.f * D / p.d), floor: pxToPlane(c, p.u, p.v, D/2)};
+}
+// Two webcams never take frames at exactly the same moment. So when a new frame arrives,
+// look at the OTHER camera's frames that happened between this camera's last two frames:
+// at each of those moments we know this camera's view by interpolating between its two
+// frames (never guessing ahead), so we can triangulate an honest 3D point. One frame of delay.
+// Auto clock sync. Webcams stamp frames with their own delays (USB, processing), so camera 2's
+// times can be tens of milliseconds off from camera 1's. When the clocks line up, the two lines
+// of sight to a MOVING ball meet tightly; when they don't, they miss. So once a second, try
+// offsets from −150 to +150 ms and keep the one where the lines meet best (smoothed over time).
+function autoSync(t){
+  const a = cams[0], b = cams[1];
+  if(!isActive(a) || !isActive(b) || t - (autoSync.last || -1e9) < 1000) return;
+  autoSync.last = t;
+  const ca = calib(a), cb = calib(b); if(!ca || !cb) return;
+  const A = a.raw.filter(d => t - d.t < 2500), B = b.raw;
+  if(A.length < 20 || B.length < 20) return;
+  const us = A.map(d => d.u), vs = A.map(d => d.v);
+  if(Math.hypot(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs)) < 60) return;   // needs the ball to move
+  const gapAt = dms => {
+    const gs = []; let j = 1;
+    for(const d of A){
+      const tb = d.t + dms; while(j < B.length && B[j].t < tb) j++;
+      if(j >= B.length || B[j-1].t > tb) continue;
+      const p = B[j-1], q = B[j]; if(q.t - p.t > 90) continue;
+      const k = (tb - p.t)/((q.t - p.t) || 1), s = triangulate(ca, d.u, d.v, cb, p.u + k*(q.u - p.u), p.v + k*(q.v - p.v));
+      if(s) gs.push(s.gap);
+    }
+    if(gs.length < 10) return Infinity;
+    gs.sort((x, y) => x - y); return gs[gs.length >> 1];
+  };
+  let best = 0, bg = Infinity;
+  for(let dms = -150; dms <= 150; dms += 5){ const g = gapAt(dms); if(g < bg){ bg = g; best = dms; } }
+  for(let dms = best - 4; dms <= best + 4; dms++){ const g = gapAt(dms); if(g < bg){ bg = g; best = dms; } }
+  const side = Math.min(gapAt(best - 40), gapAt(best + 40));
+  if(!(bg < 0.7*side)) return;                     // no clear answer this time (e.g. ball moving along an awkward line)
+  // b.raw times are camera 2's own clock, so `best` is exactly how late its stamps are
+  b.clock = b.clockSet ? 0.6*b.clock + 0.4*best : best; b.clockSet = true;
+}
+function fuse(cam, c, det, model){
+  const D = ballD(), R = D/2, o = cams[1 - cam.i], oc = isActive(o) && calib(o);
+  const prev = cam.dets[cam.dets.length - 2];            // this camera's previous frame (det is already the last)
+  let added = 0;
+  if(oc && prev && det.t - prev.t <= 90){
+    for(const od of o.dets){
+      if(od.t <= prev.t || od.t > det.t || od.used) continue;
+      const k = (od.t - prev.t)/((det.t - prev.t) || 1);
+      const s = triangulate(c, prev.u + k*(det.u - prev.u), prev.v + k*(det.v - prev.v), oc, od.u, od.v);
+      // trust it only if the lines of sight really meet, from different enough angles
+      if(!s || s.angle < 3*Math.PI/180 || s.gap > Math.max(0.25, 0.04*s.range)) continue;
+      od.used = true;
+      const q = model === 'ball' ? {air: s.p, floor: {...s.p, up: R}} : {air: {...s.p, up: 0}, floor: {...s.p, up: 0}};
+      if(addPoint(cam, c, {...q, kind: 'stereo', gap: s.gap, angle: s.angle, t: od.t})) added++;
+    }
+  }
+  if(added) return;
+  // no stereo point this frame: use this camera alone, unless the other camera still sees the
+  // ball and they were triangulating moments ago (then a one-camera estimate is far less precise).
+  // If the other camera has lost the ball, carry on with this one straight away.
+  const otherSees = o.dets.length && det.t - o.dets[o.dets.length - 1].t < 60;
+  if(oc && otherSees && det.t - (F.lastStereo || -1e9) < 150) return;
+  let q;
+  if(model === 'ball'){ q = ballWorldMono(c, det, D); if(!q) return; }
+  else { const fp = pxToPlane(c, det.u, det.v, 0); if(!fp) return; q = {air: fp, floor: fp}; }
+  addPoint(cam, c, {...q, kind: 'mono', t: det.t});
+}
+// Add a 3D point to the shared track, if it agrees with it. A camera that disagrees for a few
+// frames in a row is ignored (probably on a decoy); after that it starts a new track.
+function addPoint(cam, c, e){
+  if(F.pr && F.pr.atW && e.t - F.t < 400 && F.trail.length){
+    const p = F.pr.atW(Math.max(0, (e.t - F.t)/1000)), dd = Math.hypot(e.air.x - p.x, e.air.f - p.f, e.air.up - p.up);
+    const range = Math.hypot(e.air.x - c.C.x, e.air.f - c.C.f);
+    if(dd > Math.max(1.0, 0.15*range)){ if(++cam.disagree < 6) return false; F.trail = []; F.id++; F.start = e.t; mapTrail = []; }
+  }
+  cam.disagree = 0;
+  if(e.t - F.lastAccept > 300){ F.trail = []; F.id++; F.start = e.t; mapTrail = []; }
+  e.cam = cam.i;
+  let i = F.trail.length; while(i > 0 && F.trail[i-1].t > e.t) i--;     // keep in time order
+  F.trail.splice(i, 0, e); if(F.trail.length > 400) F.trail.shift();
+  F.lastAccept = Math.max(F.lastAccept, e.t); F.kind = e.kind;
+  (F.lastByCam ||= [-1e9, -1e9])[cam.i] = Math.max(F.lastByCam[cam.i], e.t);
+  if(e.kind === 'stereo') F.lastByCam[1 - cam.i] = Math.max(F.lastByCam[1 - cam.i], e.t);
+  if(e.kind === 'stereo'){ F.gap = e.gap; F.angle = e.angle; F.lastStereo = Math.max(F.lastStereo || -1e9, e.t); }
+  return true;
+}
+
+// =========================================================================
+// Per-frame tracking, prediction, drawing
+// =========================================================================
+function trackFrame(cam, W, H, t){
+  if(!samples.length){ cam.state = 'no colour'; if(cam === primary()) Learn.onFrame({t, W, H, locked: false, cam: cam.i}); updateHud(); return; }
+  const T = findTarget(cam, W, H, t), {best} = T;
+  const c = calib(cam), model = $('model').value, ahead = +$('ahead').value/100;
+  const worldMode = model !== 'accel' && cams.some(k => isActive(k) && calib(k));
+  let u, v, dPx, jumped = T.switched;
+  if(best){
+    [u, v] = best.at;
+    const bw = (best.x1-best.x0+1)*T.s, bh = (best.y1-best.y0+1)*T.s;
+    dPx = T.wantRound && best.shape ? best.shape.d : Math.min(bw, bh);
+    if(!cam.last || t - cam.last.t > 200 || Math.hypot(u - cam.last.x, v - cam.last.y) > W*0.25){
+      if(cam.last && t - cam.last.t <= 200) jumped = true;
+      cam.trail = []; cam.trackId++; cam.trackStart = t;
+    }
+    cam.trail.push({x:u, y:v, t, d:dPx, edge: best.edge}); if(cam.trail.length > 240) cam.trail.shift();
+    cam.last = {x:u, y:v, t, d:dPx};
+    cam.dets.push({t, u, v, d: dPx, edge: best.edge}); while(cam.dets.length && t - cam.dets[0].t > 1000) cam.dets.shift();
+    cam.raw.push({t: t + cam.clock, u, v}); while(cam.raw.length && t + cam.clock - cam.raw[0].t > 3000) cam.raw.shift();
+    cam.lockedAt = t; cam.state = 'LOCK';
+    if(worldMode && c) fuse(cam, c, {t, u, v, d: dPx, edge: best.edge}, model);
+  } else { cam.state = T.holding ? 'holding' : 'searching'; if(!T.holding){ cam.last = null; cam.track = null; } }
+
+  if(cam.i === 0) autoSync(t);
+  // Prediction: the shared 3D one when calibrated, otherwise this camera's pixels
+  const fusedFresh = worldMode && F.trail.length && t - F.lastAccept < 400;
+  let pr = null;
+  if(fusedFresh){ pr = predictWorld(t, ahead, model); F.pr = pr; F.t = t; }
+  else if(best){ pr = predictScreenCam(cam, t, ahead, model, u, v, !!c); cam.track = {at: pr.at, t, d: dPx}; }
+  // a camera without its own rulers can't use the shared 3D prediction to know where to look,
+  // so it always keeps its own on-screen track
+  if(best && !c && fusedFresh){ const sp = predictScreenCam(cam, t, ahead, model, u, v, false); cam.track = {at: sp.at, t, d: dPx}; }
+  const prCam = pr && pr.atW ? {...pr, at: tau => worldToPx(c, pr.atW(tau))} : pr;
+  // drawing (this camera)
+  if(best){
+    const bx0 = best.x0*T.s, by0 = best.y0*T.s, bw = (best.x1-best.x0+1)*T.s, bh = (best.y1-best.y0+1)*T.s;
+    ctx.strokeStyle='rgba(60,255,143,.6)'; ctx.lineWidth=2; ctx.setLineDash([8,6]); ctx.strokeRect(bx0, by0, bw, bh); ctx.setLineDash([]);
+  }
+  let pxV = [0, 0], moving = false;
+  if(prCam){
+    const p0 = prCam.at(0) || (best ? [u, v] : null), p5 = prCam.at(0.05);
+    if(p0 && p5) pxV = [(p5[0]-p0[0])/0.05, (p5[1]-p0[1])/0.05];
+    moving = pr.velW ? Math.hypot(pr.velW.vx, pr.velW.vu, pr.velW.vf) > 0.4 : Math.hypot(...pxV) > +$('minspd').value;
+    if($('pred').checked && moving) drawPrediction(prCam, ahead, c);
+    if(pr.mode === 'ball' && c) drawShadow(pr, c);
+  }
+  if(best && $('trail').checked){
+    ctx.strokeStyle='rgba(255,176,32,.8)'; ctx.lineWidth=3; ctx.beginPath();
+    cam.trail.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.stroke();
+  }
+  if(best){
+    ctx.strokeStyle='#3cff8f'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(u, v, Math.max(dPx/2, 8), 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(u-12,v); ctx.lineTo(u+12,v); ctx.moveTo(u,v-12); ctx.lineTo(u,v+12); ctx.stroke();
+  } else if(fusedFresh && c && pr.nowW){
+    // this camera lost it, but the other camera still sees it: show where it is
+    const q = worldToPx(c, pr.nowW);
+    if(q){ ctx.save(); ctx.strokeStyle = '#3cff8f'; ctx.setLineDash([6,6]); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(q[0], q[1], 26, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = '600 14px "JetBrains Mono", monospace'; ctx.fillStyle = '#3cff8f'; ctx.fillText(`seen by ${cams[1-cam.i].name}`, q[0] + 30, q[1] + 5); ctx.restore(); }
+  }
+  if(pr && pr.nowW && c){
+    const lp = worldToPx(c, pr.nowW);
+    if(lp){ ctx.font = '600 22px "JetBrains Mono", monospace'; ctx.fillStyle = '#c792ff';
+      ctx.fillText(pr.mode === 'ball' ? `${pr.nowW.up.toFixed(1)} ft up` : `${Math.hypot(pr.nowW.x, pr.nowW.f).toFixed(1)} ft`, lp[0] + (dPx || 30)/2 + 12, lp[1] - 10); }
+  }
+  updateHud();
+
+  // Shared views, stats and the recorder run once per frame of the primary camera
+  if(cam !== primary()) return;
+  viewPred = null;
+  if(pr && pr.atW && moving && $('pred').checked){
+    const path = [], ticks = [];
+    for(let i = 0; i <= 40; i++) path.push(pr.atW(ahead*i/40));
+    for(let k = 0.25; k < ahead; k += 0.25) ticks.push(pr.atW(k));
+    viewPred = {path, ticks, bounces: pr.bounces || [], wallHits: pr.wallHits || []};
+  }
+  if(fusedFresh && pr.nowW){ mapTrail.push({...pr.nowW, stereo: F.kind === 'stereo'}); if(mapTrail.length > 200) mapTrail.shift(); }
+  const locked = !!best || !!fusedFresh;
+  if(locked && pr) renderStats({pr, c: c || calib(primaryCalibrated()), u: u ?? 0, v: v ?? 0, W, H, ahead, model, pxV, d: dPx || 0, cam});
+  else clearStats();
+  const others = best ? T.comps.filter(b => b !== best && b.cnt >= T.minCells) : [];
+  const speed = pr?.velW ? Math.hypot(pr.velW.vx, pr.velW.vu, pr.velW.vf) : Math.hypot(...pxV);
+  Learn.onFrame({t, W, H, cam: cam.i, locked, holding: !locked && T.holding, waiting: T.vd.waiting, jumped,
+    trackId: pr?.atW ? F.id : cam.trackId, trackAge: pr?.atW ? t - F.start : t - cam.trackStart,
+    u, v, d: dPx, box: best ? T.boxOf(best) : null, mode: pr?.mode, nowW: pr?.nowW || null, speed,
+    pr: pr ? {...pr, at: prCam.at} : null, ahead, verdict: T.vd.v, ncands: T.cands.length,
+    stereo: fusedFresh && F.kind === 'stereo', gap: F.kind === 'stereo' ? F.gap : null,
+    camsLocked: activeCams().filter(k => t - k.lockedAt < 150).map(k => k.i + 1).join('+'),
+    rejected: others.map(b => ({...T.boxOf(b), reason: T.passed.has(b) ? 'decoy' : 'shape'})),
+    blobs: T.blobs.map(T.boxOf)});
+  if(!locked){
+    $('hud').textContent = T.tooMuch ? 'SEARCHING · the colour matches too much of the picture: raise Strictness or lower Tolerance'
+      : T.vd.waiting || T.vd.rejectedAll ? 'SEARCHING (library said no to what it saw)' : $('hud').textContent;
+  }
+}
+const primaryCalibrated = () => cams.find(k => calib(k)) || cams[0];
+
 // ---- Prediction ----------------------------------------------------------
-// Three engines, picked by the model and whether the camera is calibrated:
-//   ball   → 3D physics in feet (needs rulers + gap)
-//   floor  → cars on the floor, in feet (needs rulers + gap)
-//   screen → pixels only (always works)
-// Every engine returns at(τ) = predicted pixel τ seconds from now; the feet
-// engines also return atW(τ) = predicted world point.
+// World engines (feet) use the shared 3D track from all cameras; the screen engine
+// uses one camera's pixels when nothing is calibrated.
 const G = 32.17;          // gravity, ft/s²
 const BOUNCE = 0.78;      // basketball: keeps ~78% of its vertical speed per bounce (≈ 61% of drop height)
 const SKID = 0.92;        // and loses a little sideways speed on each bounce
 const WALL_BOUNCE = 0.75; // off a wall: keeps ~75% of the speed going into the wall…
 const WALL_SCRUB = 0.9;   // …and ~90% of the speed along it (friction while touching)
 
-function predict({model, c, t, W, ahead, u, v}){
-  const win = +$('win').value/1000;
-  const pts = trail.filter(p => t - p.t <= win*1000);
-  const T = p => (p.t - t)/1000;
+function predictWorld(t, ahead, model){
+  const win = +$('win').value;
+  const pts = F.trail.filter(e => t - e.t <= win && e.t <= t + 5);
+  const T = e => (e.t - t)/1000;
   let pr = null;
-  if(c && model === 'ball') pr = predictBall(c, pts, T, ahead);
-  else if(c && (model === 'turn' || model === 'line')) pr = predictFloor(c, pts, T, ahead, model);
-  return pr || predictScreen(pts, T, ahead, model === 'ball' ? 'accel' : model, u, v, !!c);
+  if(model === 'ball') pr = predictBall(pts.map(e => ({tau: T(e), air: e.air, floor: e.floor})), ahead);
+  else pr = predictFloor(pts.map(e => ({tau: T(e), ...e.floor})), ahead, model);
+  if(pr) return pr;
+  // too few points yet: hold the last known position
+  const lastE = F.trail[F.trail.length - 1], p = lastE.air, R = ballD()/2;
+  return {mode: model === 'ball' ? 'ball' : 'floor', R, rolling: false, landing: null, bounces: [], wallHits: [], omega: 0,
+          atW: () => p, nowW: p, velW: {vx: 0, vu: 0, vf: 0}};
 }
-
+function predictScreenCam(cam, t, ahead, model, u, v, calibrated){
+  const win = +$('win').value/1000;
+  const pts = cam.trail.filter(p => t - p.t <= win*1000);
+  return predictScreen(pts, p => (p.t - t)/1000, ahead, model === 'ball' ? 'accel' : model, u, v, calibrated);
+}
 // Turn rate from a curve fit is noisy; only trust it when it is clearly there
 function turnRate(vx, vy, ax, ay, minSpeed, ahead){
   const sp = Math.hypot(vx, vy); if(sp < minSpeed) return 0;
   let w = (vx*ay - vy*ax) / (sp*sp);
-  const cap = Math.min(4, Math.PI / Math.max(ahead, 0.1));   // never predict more than half a circle
+  const cap = Math.min(4, Math.PI / Math.max(ahead, 0.1));
   w = Math.max(-cap, Math.min(cap, w));
   return Math.abs(w) < 0.1 ? 0 : w;
 }
-// constant speed + constant turn rate → an arc of a circle
 function arc(x0, y0, vx, vy, w, tau){
   if(!w) return [x0 + vx*tau, y0 + vy*tau];
   const th = Math.atan2(vy, vx), R = Math.hypot(vx, vy) / w;
   return [x0 + R*(Math.sin(th + w*tau) - Math.sin(th)), y0 - R*(Math.cos(th + w*tau) - Math.cos(th))];
 }
-
 function predictScreen(pts, T, ahead, model, u, v, calibrated){
   let x0 = u, y0 = v, vx = 0, vy = 0, ax = 0, ay = 0;
   if(pts.length >= 4){
     const Ts = pts.map(T), X = pts.map(p => p.x), Y = pts.map(p => p.y);
     if(model === 'line' || pts.length < 8){ [x0, vx] = fit1(Ts, X); [y0, vy] = fit1(Ts, Y); }
     else if(model === 'turn'){ let k; [x0, vx, k] = fit2(Ts, X); ax = 2*k; [y0, vy, k] = fit2(Ts, Y); ay = 2*k; }
-    else { // thrown ball on screen: gravity pulls down the image, so x stays a straight line and only y curves
-      [x0, vx] = fit1(Ts, X); let k; [y0, vy, k] = fit2(Ts, Y); ay = 2*k; }
+    else { [x0, vx] = fit1(Ts, X); let k; [y0, vy, k] = fit2(Ts, Y); ay = 2*k; }
   }
   if(model === 'turn'){
     const w = turnRate(vx, vy, ax, ay, 20, ahead);
@@ -840,55 +1147,36 @@ function predictScreen(pts, T, ahead, model, u, v, calibrated){
   }
   return {mode:'screen', omega:0, calibrated, at: tau => [x0 + vx*tau + 0.5*ax*tau*tau, y0 + vy*tau + 0.5*ay*tau*tau]};
 }
-
-function predictFloor(c, pts, T, ahead, model){
-  const m = pts.map(p => { const q = pxToPlane(c, p.x, p.y, 0); return q ? {tau:T(p), ...q} : null; }).filter(Boolean);
+// cars: positions on the floor (feet)
+function predictFloor(m, ahead, model){
   if(m.length < 3) return null;
-  const Ts = m.map(p => p.tau), X = m.map(p => p.x), F = m.map(p => p.f);
+  const Ts = m.map(p => p.tau), X = m.map(p => p.x), Fw = m.map(p => p.f);
   let x0, f0, vx, vf, ax = 0, af = 0;
-  if(model === 'line' || m.length < 8){ [x0, vx] = fit1(Ts, X); [f0, vf] = fit1(Ts, F); }
-  else { let k; [x0, vx, k] = fit2(Ts, X); ax = 2*k; [f0, vf, k] = fit2(Ts, F); af = 2*k; }
+  if(model === 'line' || m.length < 8){ [x0, vx] = fit1(Ts, X); [f0, vf] = fit1(Ts, Fw); }
+  else { let k; [x0, vx, k] = fit2(Ts, X); ax = 2*k; [f0, vf, k] = fit2(Ts, Fw); af = 2*k; }
   const w = model === 'line' ? 0 : turnRate(vx, vf, ax, af, 0.3, ahead);
   const atW = tau => { const [x, f] = arc(x0, f0, vx, vf, w, tau); return {x, up:0, f}; };
-  // floor axes are mirrored vs screen axes, so flip the sign: positive = turning right
-  return {mode:'floor', omega:-w, atW, at: tau => worldToPx(c, atW(tau)), nowW:{x:x0, up:0, f:f0}, velW:{vx, vu:0, vf}};
+  return {mode:'floor', omega:-w, atW, nowW:{x:x0, up:0, f:f0}, velW:{vx, vu:0, vf}};
 }
-
-// One frame's ball position in feet, two ways:
-//  air   – distance from apparent size (works anywhere)
-//  floor – if it's rolling, its centre is exactly R up, so cross that plane (more precise,
-//          but badly wrong if the ball is actually in the air, so only used once rolling is confirmed)
-function ballWorld(c, p, D){
-  if(p.edge || p.d < 4) return null;                    // cut off by the frame: size would be wrong
-  const zc = c.f * D / p.d, r = ray(c, p.x, p.y);
-  const air = camToWorld(c, [r[0]*zc, r[1]*zc, zc]);
-  return {air, floor: pxToPlane(c, p.x, p.y, D/2)};
-}
-
-function predictBall(c, pts, T, ahead){
-  const D = (+$('balld').value || 9.4) / 12, R = D/2;
-  const raw = pts.map(p => { const q = ballWorld(c, p, D); return q ? {tau:T(p), ...q} : null; }).filter(Boolean);
+// balls: 3D points (feet), each with an "air" estimate and an "on the floor" estimate
+function predictBall(raw, ahead){
+  const D = ballD(), R = D/2;
   if(raw.length < 4) return null;
-  // Rolling = nearly every recent size-based height sits at ball-radius height
   const rolling = raw.filter(p => p.air.up < R + 0.3).length >= 0.85*raw.length && raw.every(p => p.floor);
   let m = raw.map(p => ({tau:p.tau, ...(rolling ? p.floor : p.air)}));
   if(!rolling){
-    // Only use points since the last bounce (a bounce starts a new arc)
-    let k0 = 0;
+    let k0 = 0;                                          // only points since the last bounce
     for(let i = m.length-2; i > 0; i--){
       if(m[i].up < R + 0.35 && m[i].up <= m[i-1].up && m[i].up <= m[i+1].up){ k0 = i; break; }
     }
     if(m.length - k0 >= 3) m = m.slice(k0);
   }
-  // Fit the physics:
-  //   sideways + forward: no force in the air → straight lines
-  //   height: gravity FIXED at 32.2 ft/s²: up(τ) = up0 + vu·τ − ½gτ²  ⇔  up + ½gτ² = up0 + vu·τ
+  // sideways + forward: straight lines · height: gravity FIXED at 32.2 ft/s²
   const fitAll = seg => {
     const Ts = seg.map(p => p.tau);
     const [x0, vx] = fit1(Ts, seg.map(p => p.x)), [f0, vf] = fit1(Ts, seg.map(p => p.f));
     let up0 = R, vu = 0;
     if(!rolling) [up0, vu] = fit1(Ts, seg.map(p => p.up + 0.5*G*p.tau*p.tau));
-    // how far the points sit from the fitted motion (root-mean-square, feet)
     let eh = 0, eu = 0;
     for(const p of seg){
       eh += (p.x - x0 - vx*p.tau)**2 + (p.f - f0 - vf*p.tau)**2;
@@ -896,21 +1184,29 @@ function predictBall(c, pts, T, ahead){
     }
     return {x0, vx, f0, vf, up0, vu, eh: Math.sqrt(eh/seg.length), eu: Math.sqrt(eu/seg.length)};
   };
-  // If the ball was just thrown, kicked, caught or hit something, the oldest points belong
-  // to a different motion. Drop them one at a time until the physics fits what is left.
-  // Allowed misfit grows with distance, because far-away measurements are noisier.
+  // after a throw/kick/catch the oldest points belong to a different motion: drop them
   let fit = fitAll(m);
   const dist = Math.hypot(fit.x0, fit.f0), tolH = 0.08 + 0.02*dist, tolU = 0.05 + 0.01*dist;
   while((fit.eh > tolH || fit.eu > tolU) && m.length > 5){ m = m.slice(1); fit = fitAll(m); }
-  const {x0, vx, f0, vf} = fit;
-  let up0 = rolling ? R : fit.up0, vu = rolling ? 0 : fit.vu;
+  // Still doesn't fit (the ball was hit/kicked/reversed a moment ago and the newest points are
+  // a mix)? Then admit it: hold the current position instead of extrapolating a nonsense speed.
+  let unsure = fit.eh > tolH*1.5 || fit.eu > tolU*1.5;
+  // Also compare with the speed from just the newest 3 points: right after a hit or reversal
+  // they disagree sharply with the fit (which still includes older points); in normal flight they agree.
+  if(!unsure && m.length >= 6){
+    const f3 = fitAll(m.slice(-3)), sp = Math.hypot(fit.vx, fit.vf, fit.vu);
+    unsure = Math.hypot(f3.vx - fit.vx, f3.vf - fit.vf, f3.vu - fit.vu) > 5 + 0.3*sp;
+  }
+  const {x0, f0} = fit;
+  let vx = unsure ? 0 : fit.vx, vf = unsure ? 0 : fit.vf;
+  let up0 = rolling ? R : fit.up0, vu = rolling || unsure ? 0 : fit.vu;
+  if(unsure) up0 = m[m.length - 1].up;
   if(up0 < R) up0 = R;
-  // Step the physics forward 1/240 s at a time (exact parabola within each step)
   const dt = 1/240, steps = Math.ceil(Math.max(ahead, 0.1)/dt);
-  let x = x0, f = f0, up = up0, ux = vx, uf = vf, uu = vu, roll = rolling, landing = null;
+  let x = x0, f = f0, up = up0, ux = vx, uf = vf, uu = vu, roll = rolling || unsure, landing = null;
   const path = [{x, up, f}], bounces = [], wallHits = [];
-  // only walls the ball is in front of (a ball already behind a wall, e.g. through a doorway, ignores it)
-  const wallsW = walls.map(w => wallWorld(c, w)).filter(wl => wl && wl.nx*(x0 - wl.ax) + wl.nf*(f0 - wl.af) > -R);
+  // only walls the ball is in front of (a ball already behind a wall ignores it)
+  const wallsW = walls.map(wallWorld).filter(wl => wl && wl.nx*(x0 - wl.ax) + wl.nf*(f0 - wl.af) > -R);
   for(let i = 1; i <= steps; i++){
     x += ux*dt; f += uf*dt;
     if(!roll){
@@ -919,16 +1215,13 @@ function predictBall(c, pts, T, ahead){
         if(!landing) landing = {tau: i*dt, x, f};
         bounces.push({x, f});
         up = R; uu = -uu*BOUNCE; ux *= SKID; uf *= SKID;
-        if(uu < 2){ uu = 0; roll = true; }                 // too weak to bounce again: rolls
+        if(uu < 2){ uu = 0; roll = true; }
       }
     }
-    // Walls: when the ball's edge reaches a wall while moving into it, split its floor
-    // velocity into "into the wall" and "along the wall". Flip the first (×0.75),
-    // keep most of the second (×0.9). Height and falling carry on unchanged.
     for(const wl of wallsW){
-      const dist = wl.nx*(x - wl.ax) + wl.nf*(f - wl.af), vn = ux*wl.nx + uf*wl.nf;
-      if(dist < R && vn < 0){
-        x += (R - dist)*wl.nx; f += (R - dist)*wl.nf;
+      const dd = wl.nx*(x - wl.ax) + wl.nf*(f - wl.af), vn = ux*wl.nx + uf*wl.nf;
+      if(dd < R && vn < 0){
+        x += (R - dd)*wl.nx; f += (R - dd)*wl.nf;
         const tx = ux - vn*wl.nx, tf = uf - vn*wl.nf;
         ux = tx*WALL_SCRUB - WALL_BOUNCE*vn*wl.nx; uf = tf*WALL_SCRUB - WALL_BOUNCE*vn*wl.nf;
         wallHits.push({x: x - R*wl.nx, up, f: f - R*wl.nf, tx: -wl.nf, tf: wl.nx});
@@ -937,8 +1230,7 @@ function predictBall(c, pts, T, ahead){
     path.push({x, up, f});
   }
   const atW = tau => path[Math.max(0, Math.min(path.length-1, Math.round(tau/dt)))];
-  return {mode:'ball', R, D, rolling, landing, bounces, wallHits, atW, at: tau => worldToPx(c, atW(tau)),
-          nowW:{x:x0, up:up0, f:f0}, velW:{vx, vu: rolling ? 0 : vu, vf}};
+  return {mode:'ball', R, D, rolling, unsure, landing, bounces, wallHits, atW, nowW:{x:x0, up:up0, f:f0}, velW:{vx, vu: rolling ? 0 : vu, vf}};
 }
 
 function drawPrediction(pr, ahead, c){
@@ -957,19 +1249,15 @@ function drawPrediction(pr, ahead, c){
     ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(e[0], e[1], 14, 0, 7); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(e[0]-20, e[1]); ctx.lineTo(e[0]+20, e[1]); ctx.moveTo(e[0], e[1]-20); ctx.lineTo(e[0], e[1]+20); ctx.stroke();
   }
-  // Bounce spots: a ball-sized ring drawn flat on the floor
-  if(pr.bounces && c){
-    ctx.lineWidth = 3;
-    for(const b of pr.bounces) floorRing(c, b.x, b.f, pr.R, '#3aa0ff');
-  }
+  if(pr.bounces && c){ ctx.lineWidth = 3; for(const b of pr.bounces) floorRing(c, b.x, b.f, pr.R, '#3aa0ff'); }
   if(pr.wallHits && c){
     ctx.lineWidth = 3; ctx.strokeStyle = '#3aa0ff';
-    for(const h of pr.wallHits){
-      ctx.beginPath(); let pen = false;
+    for(const hh of pr.wallHits){
+      ctx.beginPath(); let pen2 = false;
       for(let i = 0; i <= 32; i++){
-        const a = i/32*Math.PI*2, p = worldToPx(c, {x: h.x + pr.R*Math.cos(a)*h.tx, up: h.up + pr.R*Math.sin(a), f: h.f + pr.R*Math.cos(a)*h.tf});
-        if(!p){ pen = false; continue; }
-        pen ? ctx.lineTo(...p) : ctx.moveTo(...p); pen = true;
+        const a = i/32*Math.PI*2, p = worldToPx(c, {x: hh.x + pr.R*Math.cos(a)*hh.tx, up: hh.up + pr.R*Math.sin(a), f: hh.f + pr.R*Math.cos(a)*hh.tf});
+        if(!p){ pen2 = false; continue; }
+        pen2 ? ctx.lineTo(...p) : ctx.moveTo(...p); pen2 = true;
       }
       ctx.stroke();
     }
@@ -985,7 +1273,6 @@ function floorRing(c, x, f, rad, col){
   }
   ctx.stroke();
 }
-// The ball's shadow: a dotted line straight down to the floor, so height is easy to read
 function drawShadow(pr, c){
   const b = worldToPx(c, pr.nowW), g = worldToPx(c, {...pr.nowW, up: 0});
   if(!b || !g) return;
@@ -999,21 +1286,20 @@ function drawShadow(pr, c){
 const txt = (id, v) => { $(id).textContent = v; };
 const deg = rad => Math.round(rad*180/Math.PI);
 const side = v => `${Math.abs(v).toFixed(2)} ft ${v < 0 ? 'left' : 'right'}`;
-function renderStats({pr, c, u, v, W, H, ahead, model, pxV, d, r, moving}){
+function renderStats({pr, c, u, v, W, H, ahead, model, pxV, d, cam}){
   txt('st','LOCKED'); $('st').className = 'v lock';
-  const e = pr.at(ahead);
+  const e = pr.at ? pr.at(ahead) : (c && pr.atW ? worldToPx(c, pr.atW(ahead)) : null);
   txt('pos', `${(u-W/2)|0}, ${(H/2-v)|0} px from centre`);
   txt('vel', `${pxV[0]|0}, ${-pxV[1]|0} px/s`);
-  txt('size', `${Math.round(d)} px wide`);
+  txt('size', d ? `${Math.round(d)} px wide` : ' ');
   txt('pred-out', e ? `${(e[0]-W/2)|0}, ${(H/2-e[1])|0} px` : '–');
   const turnTxt = w => model === 'line' ? 'straight-line model'
     : `turning ${Math.round(Math.abs(w)*180/Math.PI)}°/s ${Math.abs(w) < 0.05 ? '(straight)' : w < 0 ? 'left' : 'right'}`;
-
   if(pr.mode === 'screen'){
-    const lat = floorPosLateral(u, v, W);
+    const lat = floorPosLateral(cam, u, v, W);
     $('units').className = lat ? 'units on' : 'units';
     txt('units', model === 'ball' || model === 'turn' || model === 'line'
-      ? (rulers.far && rulers.near ? 'Units: pixels · enter the ruler gap for 3D feet' : 'Units: pixels · mark both rulers + gap for feet')
+      ? (cam.rulers.far && cam.rulers.near ? 'Units: pixels · enter the ruler gap for 3D feet' : 'Units: pixels · mark both rulers + gap for feet')
       : 'Units: pixels (on-screen parabola)');
     const sp = Math.hypot(...pxV);
     txt('spd', `${sp|0} px/s`); txt('spdsub', 'calibrate for ft/s and mph');
@@ -1027,15 +1313,16 @@ function renderStats({pr, c, u, v, W, H, ahead, model, pxV, d, r, moving}){
     txt('rsize', lat ? `${(d / lat.s * 12).toFixed(1)} in` : `${Math.round(d)} px`);
     return;
   }
-
   const {x, up, f} = pr.nowW, {vx, vu, vf} = pr.velW;
-  const sp = Math.hypot(vx, vu, vf), ball = pr.mode === 'ball';
+  const sp = Math.hypot(vx, vu, vf), ball = pr.mode === 'ball', c0 = calib(cams[0]) || c;
+  const two = cams.filter(k => calib(k)).length > 1 && activeCams().length > 1;
   $('units').className = 'units on';
-  txt('units', ball ? 'Units: feet · 3D ball physics' : 'Units: feet · on the floor');
+  txt('units', (ball ? 'Units: feet · 3D ball physics' : 'Units: feet · on the floor') + (two ? (F.kind === 'stereo' ? ' · both cameras' : ' · one camera') : ''));
   txt('spd', `${sp.toFixed(1)} ft/s`);
   txt('spdsub', `${(sp*0.6818).toFixed(2)} mph · ${(sp*12).toFixed(0)} in/s`);
   txt('rpos', `${side(x)} · ${f.toFixed(2)} ft out`);
-  txt('rdist', `${Math.hypot(x, up - c.h, f).toFixed(2)} ft`); txt('rdistsub', 'straight line from the camera');
+  txt('rdist', `${Math.hypot(x - c0.C.x, up - c0.C.up, f - c0.C.f).toFixed(2)} ft`);
+  txt('rdistsub', two && F.kind === 'stereo' ? `from Cam 1 · triangulated (rays ${F.gap.toFixed(2)} ft apart)` : 'straight line from Camera 1');
   txt('rvel', `${vx.toFixed(1)} · ${vf.toFixed(1)} · ${vu.toFixed(1)} ft/s`);
   txt('heading', Math.hypot(vx, vf) > 0.2 ? `${deg(Math.atan2(vx, vf))}° (0° = away)` : '–');
   txt('turnrate', ball ? (pr.rolling ? 'rolling on the floor' : vu > 0 ? `rising ${vu.toFixed(1)} ft/s` : `falling ${(-vu).toFixed(1)} ft/s`) : turnTxt(pr.omega));
@@ -1047,12 +1334,8 @@ function renderStats({pr, c, u, v, W, H, ahead, model, pxV, d, r, moving}){
   } else { txt('rheight', 'on the floor'); txt('rland', ' '); }
   const q = pr.atW(ahead);
   txt('rpred', `${q.x.toFixed(2)} · ${q.f.toFixed(2)} ft` + (ball ? ` · ${q.up.toFixed(1)} up` : ''));
-  // measured size: pixels × camera depth ÷ focal length (in the air this just echoes your ball setting)
-  const zc = c.cos*f - c.sin*(up - c.h);
-  txt('rsize', `${(d * zc / c.f * 12).toFixed(1)} in wide`);
-  ctx.font = '600 22px "JetBrains Mono", monospace'; ctx.fillStyle = '#c792ff';
-  const lp = worldToPx(c, pr.nowW) || [u, v];
-  ctx.fillText(ball ? `${up.toFixed(1)} ft up` : `${Math.hypot(x, f).toFixed(1)} ft`, lp[0] + d/2 + 12, lp[1] - 10);
+  // measured size: pixels × camera depth ÷ focal length (with one camera in the air this echoes your ball setting)
+  if(d && c){ const zc = camDepth(c, pr.nowW); txt('rsize', `${(d * zc / c.f * 12).toFixed(1)} in wide`); } else txt('rsize', '–');
 }
 function clearStats(){
   viewPred = null;
@@ -1068,7 +1351,7 @@ function fit1(T,X){
   const d = n*stt - st*st; if(!d) return [X[n-1],0];
   const b = (n*stx - st*sx)/d; return [(sx - b*st)/n, b];
 }
-// Least-squares parabola x = a + bτ + cτ² → [a, b, c] (solves the 3×3 normal equations)
+// Least-squares parabola x = a + bτ + cτ² → [a, b, c]
 function fit2(T,X){
   let s0=0,s1=0,s2=0,s3=0,s4=0,y0=0,y1=0,y2=0;
   for(let i=0;i<T.length;i++){ const t=T[i], t2=t*t, x=X[i]; s0++; s1+=t; s2+=t2; s3+=t2*t; s4+=t2*t2; y0+=x; y1+=t*x; y2+=t2*x; }
@@ -1082,7 +1365,9 @@ function drawCross(W,H){
   ctx.beginPath(); ctx.moveTo(W/2-20,H/2); ctx.lineTo(W/2+20,H/2); ctx.moveTo(W/2,H/2-20); ctx.lineTo(W/2,H/2+20); ctx.stroke();
 }
 navigator.mediaDevices?.addEventListener?.('devicechange', listCams);
+listCams().catch(() => {});
 Learn.init();
+layout();
 </script>
 </body>
 </html>

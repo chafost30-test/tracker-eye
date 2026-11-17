@@ -21,8 +21,8 @@ const Learn = (() => {
   const S = {
     lib: [], libVersion: 0, ai: {status: 'loading', kind: 'basic', model: null},
     inbox: [], rec: null, lastReport: null, replay: false, frozen: false,
-    ring: [], pool: [], fails: [], lastBlobs: [], snap: null,
-    vAt: -1e9, vFails: 0, lastV: null, cache: new Map(), lastFresh: -1e9,
+    ring: [], pool: [], fails: [], blobs: [[], []], snaps: [null, null], snap: null, primaryCam: 0,
+    vs: {}, cache: new Map(),
     suggestAt: {}, frameN: 0, prevLocked: false
   };
 
@@ -37,7 +37,7 @@ const Learn = (() => {
   const imgFrom = url => new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = url; });
   const download = (blob, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000); };
   const active = () => q('preset') ? q('preset').value : 'ball';
-  const liveStream = () => (typeof stream !== 'undefined' && stream) || null;   // `stream` lives in index.html
+  const liveCams = () => cams.filter(c => c.stream);                      // `cams` lives in index.html
 
   // Square crop around (cx, cy), resized to `out` px
   function crop(src, cx, cy, size, out = 128){
@@ -203,40 +203,42 @@ const Learn = (() => {
   // Called by the tracker after colour + shape picked candidates.
   //  fresh = picking a new target: test the top 3, keep the best that LOOKS right
   //  locked = re-check the current target 4× a second; two fails in a row drop it
-  function check({best, cands, fresh, s, t, rank}){
-    if(!ready() || !S.snap) return {best, v: null};
+  function check({best, cands, fresh, s, t, rank, key = 0}){
+    const snapC = S.snaps[key];
+    if(!ready() || !snapC) return {best, v: null};
+    const V = S.vs[key] ||= {vAt: -1e9, vFails: 0, lastV: null, lastFresh: -1e9};   // each camera keeps its own state
     const box = b => ({cx: (b.x0 + b.x1 + 1)/2*s, cy: (b.y0 + b.y1 + 1)/2*s, size: Math.max(b.x1 - b.x0 + 1, b.y1 - b.y0 + 1)*s*1.3});
     const judgeBox = b => {
-      const bx = box(b), key = `${Math.round(bx.cx/32)},${Math.round(bx.cy/32)},${Math.round(bx.size/24)}`;
-      const hitc = S.cache.get(key); if(hitc && t - hitc.t < 300) return hitc.v;
-      const v = judge(crop(S.snap, bx.cx, bx.cy, bx.size, 224)); S.cache.set(key, {t, v});
+      const bx = box(b), ck = `${key}:${Math.round(bx.cx/32)},${Math.round(bx.cy/32)},${Math.round(bx.size/24)}`;
+      const hitc = S.cache.get(ck); if(hitc && t - hitc.t < 300) return hitc.v;
+      const v = judge(crop(snapC, bx.cx, bx.cy, bx.size, 224)); S.cache.set(ck, {t, v});
       if(S.cache.size > 200) S.cache.clear();
       return v;
     };
     if(fresh){
-      if(t - S.lastFresh < 80) return {best: null, v: null, waiting: true};   // don't hammer the AI every frame
-      S.lastFresh = t;
+      if(t - V.lastFresh < 80) return {best: null, v: null, waiting: true};   // don't hammer the AI every frame
+      V.lastFresh = t;
       const ranked = [...cands].sort((a, b) => rank(b) - rank(a)).slice(0, 3);
       let pick = null;
       for(const b of ranked){ b.v = judgeBox(b); if(b.v.ok && (!pick || b.v.score > pick.v.score)) pick = b; }
-      for(const b of ranked) if(b !== pick && b.v && Math.abs(b.v.score) < 0.04) suggest(S.snap, box(b), active(), 'unsure', 'library check was borderline', false);
-      S.vAt = t; S.vFails = 0; S.lastV = pick ? pick.v : null;
+      for(const b of ranked) if(b !== pick && b.v && Math.abs(b.v.score) < 0.04) suggest(snapC, box(b), active(), 'unsure', 'library check was borderline', false);
+      V.vAt = t; V.vFails = 0; V.lastV = pick ? pick.v : null;
       if(pick && rec()) rec().vChecked++, rec().vPassed++;
       else if(ranked.length && rec()) rec().vChecked++;
       return {best: pick, v: pick ? pick.v : (ranked[0] && ranked[0].v) || null, rejectedAll: !pick && ranked.length > 0};
     }
-    if(best && t - S.vAt > 250){
-      S.vAt = t; best.v = judgeBox(best);
+    if(best && t - V.vAt > 250){
+      V.vAt = t; best.v = judgeBox(best);
       if(rec()){ rec().vChecked++; if(best.v.ok) rec().vPassed++; }
-      if(best.v.ok){ S.vFails = 0; S.lastV = best.v; }
-      else if(++S.vFails >= 2){
-        S.vFails = 0; S.lastV = null;
-        suggest(S.snap, box(best), 'not-target', 'high', 'locked on, but the library says it is not the target', true);
+      if(best.v.ok){ V.vFails = 0; V.lastV = best.v; }
+      else if(++V.vFails >= 2){
+        V.vFails = 0; V.lastV = null;
+        suggest(snapC, box(best), 'not-target', 'high', 'locked on, but the library says it is not the target', true);
         event(t, 'verify_fail', 'Lock dropped: colour and shape matched, but it did not look like the examples');
         return {best: null, v: best.v, dropped: true};
       }
     }
-    return {best, v: S.lastV};
+    return {best, v: V.lastV};
   }
   function testVerifier(){
     const tgt = active(), test = S.lib.filter(e => e.split === 'test');
@@ -274,7 +276,7 @@ const Learn = (() => {
     samples = [{hsv: [mh, sat, val], rgb: `rgb(${rgb.join(',')})`}];
     q('tol').value = tol; q('tol').dispatchEvent(new Event('input'));
     q('strict').value = Math.round(Math.max(20, Math.min(95, 100*cut/sat))); q('strict').dispatchEvent(new Event('input'));
-    renderSwatches(); trail = []; last = null; track = null;
+    renderSwatches(); resetTracking();
     flash(`Colour learned from ${ex.length} examples: hue ${mh.toFixed(0)}°, tolerance ${tol}, strictness ${q('strict').value}%.${note}`);
   }
   function hsvToRgb(h, s, v){ const f = n => { const k = (n + h/60) % 6; return Math.round(255*(v - v*s*Math.max(0, Math.min(k, 4 - k, 1)))); }; return [f(5), f(3), f(1)]; }
@@ -314,18 +316,19 @@ const Learn = (() => {
     flash(`Added ${n} example${n === 1 ? '' : 's'} to the library.`);
   }
   // Live labelling: click a blob (in label mode) or press B / C / N / W
-  function labelClick(x, y){
-    const mode = q('labelMode')?.value; if(!mode || mode === 'off' || !S.snap) return false;
+  function labelClick(x, y, camI = 0){
+    const snapC = S.snaps[camI];
+    const mode = q('labelMode')?.value; if(!mode || mode === 'off' || !snapC) return false;
     if(S.frozen){ flash('Demo mode is on: learning is frozen.'); return true; }
-    const b = S.lastBlobs.find(b => Math.abs(x - b.cx) < b.size/2 && Math.abs(y - b.cy) < b.size/2) || {cx: x, cy: y, size: 140};
-    addExample(crop(S.snap, b.cx, b.cy, b.size), mode, 'live'); uiLibrary();
+    const b = (S.blobs[camI] || []).find(b => Math.abs(x - b.cx) < b.size/2 && Math.abs(y - b.cy) < b.size/2) || {cx: x, cy: y, size: 140};
+    addExample(crop(snapC, b.cx, b.cy, b.size), mode, 'live'); uiLibrary();
     flash(`Saved as ${LABELS[mode] || mode}.`);
     return true;
   }
   function labelCurrent(label){
     if(S.frozen) return flash('Demo mode is on: learning is frozen.');
-    const b = S.cur; if(!b || !S.snap) return flash('Nothing is locked on right now.');
-    addExample(crop(S.snap, b.cx, b.cy, b.size), label, 'live'); uiLibrary();
+    const b = S.cur, snapC = S.snaps[S.primaryCam]; if(!b || !snapC) return flash('Nothing is locked on right now.');
+    addExample(crop(snapC, b.cx, b.cy, b.size), label, 'live'); uiLibrary();
     flash(`Saved the current lock as ${LABELS[label]}.`);
   }
 
@@ -343,20 +346,24 @@ const Learn = (() => {
     if(S.rec) return;
     S.prevLocked = false;
     const r = S.rec = {name: q('runName').value, startPerf: performance.now(), startDate: new Date(), frames: [], events: [], failures: [],
-      pending: [], errors: [], errUnit: null, vChecked: 0, vPassed: 0, chunks: [], media: null, mime: '', locked: 0, holding: 0, total: 0, fpsT: [],
-      switches: 0, lost: 0, spikes: 0, replay: S.replay, libVersion: S.libVersion, aiKind: S.ai.kind};
-    if(q('recVideo').checked && !S.replay && liveStream()){
+      pending: [], errors: [], errUnit: null, vChecked: 0, vPassed: 0, media: [], locked: 0, holding: 0, total: 0, fpsT: [],
+      switches: 0, lost: 0, spikes: 0, stereo: 0, gaps: [], cams: activeCams().length, replay: S.replay, libVersion: S.libVersion, aiKind: S.ai.kind};
+    if(q('recVideo').checked && !S.replay){
+      // one recorder per live camera, all started together so replays line up
       const types = ['video/webm;codecs=vp9', 'video/webm', 'video/mp4'];
-      r.mime = types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
-      try{ r.media = new MediaRecorder(liveStream(), r.mime ? {mimeType: r.mime, videoBitsPerSecond: 2500000} : undefined);
-        r.media.ondataavailable = e => e.data.size && r.chunks.push(e.data); r.media.start(1000); } catch(e){ r.media = null; }
+      const mime = types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+      for(const cam of liveCams()){
+        try{ const m = {cam: cam.i, mime, chunks: [], rec: new MediaRecorder(cam.stream, mime ? {mimeType: mime, videoBitsPerSecond: 2500000} : undefined)};
+          m.rec.ondataavailable = e => e.data.size && m.chunks.push(e.data); r.media.push(m); } catch(e){}
+      }
+      r.media.forEach(m => m.rec.start(1000));
     }
     q('recBtn').textContent = '■ Stop recording'; q('recBtn').classList.add('active'); q('reportBtn').disabled = true;
     q('recDot').hidden = false; uiRecCounts();
   }
   async function stopRecording(){
     const r = S.rec; if(!r) return;
-    if(r.media && r.media.state !== 'inactive'){ await new Promise(ok => { r.media.onstop = ok; r.media.stop(); }); }
+    await Promise.all(r.media.filter(m => m.rec.state !== 'inactive').map(m => new Promise(ok => { m.rec.onstop = ok; m.rec.stop(); })));
     r.endPerf = performance.now(); S.rec = null; S.lastRun = r;
     await finishStrips(r, true);
     q('recBtn').textContent = '● Record a test run'; q('recBtn').classList.remove('active'); q('reportBtn').disabled = false;
@@ -367,7 +374,7 @@ const Learn = (() => {
   function onFrame(f){
     S.frameN++;
     if(f.box) S.cur = f.box; else S.cur = null;
-    S.lastBlobs = f.blobs || [];
+    S.primaryCam = f.cam || 0;
     // status line: does the lock look like the target?
     const v = f.verdict;
     if(f.locked){
@@ -379,6 +386,7 @@ const Learn = (() => {
     const r = rec();
     if(!r){ S.prevLocked = f.locked; return; }
     r.total++; if(f.locked) r.locked++; if(f.holding) r.holding++;
+    if(f.stereo){ r.stereo++; if(f.gap != null) r.gaps.push(f.gap); }
     r.fpsT.push(f.t);
     if(f.jumped){ r.switches++; event(f.t, 'jump', 'The lock jumped to a different blob'); }
     if(S.prevLocked && !f.locked && !f.holding){ r.lost++; event(f.t, 'lost', 'Lost the target'); }
@@ -403,12 +411,13 @@ const Learn = (() => {
     } else r.pending = [];
     if(r.frames.length < 200000) r.frames.push([Math.round(f.t - r.startPerf), f.locked ? 1 : 0, f.holding ? 1 : 0, f.trackId ?? '', f.u?.toFixed(1) ?? '', f.v?.toFixed(1) ?? '', f.d?.toFixed(1) ?? '',
       f.mode || '', f.nowW ? f.nowW.x.toFixed(2) : '', f.nowW ? f.nowW.up.toFixed(2) : '', f.nowW ? f.nowW.f.toFixed(2) : '', f.speed?.toFixed(2) ?? '',
-      v ? (v.ok ? 1 : 0) : '', v && v.sT != null ? v.sT.toFixed(3) : '', f.ncands ?? '']);
+      v ? (v.ok ? 1 : 0) : '', v && v.sT != null ? v.sT.toFixed(3) : '', f.ncands ?? '', f.camsLocked ?? '', f.stereo ? 1 : 0, f.gap != null ? f.gap.toFixed(3) : '']);
     S.prevLocked = f.locked;
     if(S.frameN % 15 === 0) uiRecCounts();
   }
   // Suggestions the app makes on its own
   function autoSuggest(f){
+    S.snap = S.snaps[f.cam || 0];
     if(S.frozen || !S.snap) return;
     if(f.locked && f.box && f.trackAge > 600 && !f.jumped && (!f.verdict || f.verdict.ok) && f.speed < (f.nowW ? 40 : f.W*2))
       suggest(S.snap, f.box, active(), 'high', 'steady track, believable speed', true);
@@ -420,11 +429,11 @@ const Learn = (() => {
     }
   }
   // Ring buffer of small frames (with overlays) for filmstrips
-  function afterDraw(t){
-    if(!S.rec && !S.fails.length && !(S.lastRun && S.lastRun.failures.some(x => !x.strip))) { if(S.frameN % 2) return; }
+  function afterDraw(t, canvases = [cv]){
     if(S.frameN % 2) return;
-    let c = S.pool.pop(); if(!c){ c = document.createElement('canvas'); c.width = 320; c.height = 180; }
-    c.getContext('2d').drawImage(cv, 0, 0, 320, 180); S.ring.push({t, c});
+    const n = Math.max(1, canvases.length), fw = n > 1 ? 240 : 320, fh = n > 1 ? 135 : 180;
+    let c = S.pool.pop(); if(!c || c.width !== fw*n || c.height !== fh){ c = document.createElement('canvas'); c.width = fw*n; c.height = fh; }
+    const g = c.getContext('2d'); canvases.forEach((k, i) => g.drawImage(k, i*fw, 0, fw, fh)); S.ring.push({t, c});
     while(S.ring.length && t - S.ring[0].t > 2500) S.pool.push(S.ring.shift().c);
     if(S.rec) finishStrips(S.rec, false);
   }
@@ -435,13 +444,17 @@ const Learn = (() => {
       const span = S.ring.filter(x => x.t >= fl.t - 1000 && x.t <= fl.t + 500);
       if(!span.length){ fl.strip = 'none'; continue; }
       const pick = []; for(let i = 0; i < 8; i++) pick.push(span[Math.round(i*(span.length - 1)/7)]);
-      const W = 8*320, H = 180 + 22, c = document.createElement('canvas'); c.width = W; c.height = H;
+      const fw = Math.max(...pick.map(p => p.c.width)), fh = Math.max(...pick.map(p => p.c.height));
+      const cols = fw > 400 ? 4 : 8, rows = 8/cols;                 // two-camera frames are wide: 4 per row, 2 rows
+      const W = cols*fw, H = rows*(fh + 22), c = document.createElement('canvas'); c.width = W; c.height = H;
       const g = c.getContext('2d'); g.fillStyle = '#0e1214'; g.fillRect(0, 0, W, H);
+      const closest = Math.min(...pick.map(p => Math.abs(p.t - fl.t)));
       pick.forEach((fr, i) => {
-        g.drawImage(fr.c, i*320, 22);
-        const dt = (fr.t - fl.t)/1000; g.fillStyle = Math.abs(dt) < 0.04 ? '#ff5a4f' : '#dfe7ea';
-        g.font = '600 14px monospace'; g.fillText(`${dt >= 0 ? '+' : ''}${dt.toFixed(2)} s`, i*320 + 6, 16);
-        if(Math.abs(dt) === Math.min(...pick.map(p => Math.abs((p.t - fl.t)/1000)))){ g.strokeStyle = '#ff5a4f'; g.lineWidth = 4; g.strokeRect(i*320 + 2, 24, 316, 176); }
+        const x = (i % cols)*fw, y = Math.floor(i/cols)*(fh + 22);
+        g.drawImage(fr.c, x, y + 22);
+        const dt = (fr.t - fl.t)/1000; g.fillStyle = Math.abs(fr.t - fl.t) === closest ? '#ff5a4f' : '#dfe7ea';
+        g.font = '600 14px monospace'; g.fillText(`${dt >= 0 ? '+' : ''}${dt.toFixed(2)} s`, x + 6, y + 16);
+        if(Math.abs(fr.t - fl.t) === closest){ g.strokeStyle = '#ff5a4f'; g.lineWidth = 4; g.strokeRect(x + 2, y + 24, fw - 4, fh - 4); }
       });
       fl.strip = await new Promise(ok => c.toBlob(ok, 'image/jpeg', 0.8));
     }
@@ -462,15 +475,17 @@ const Learn = (() => {
       lockSwitches: r.switches, lost: r.lost, speedSpikes: r.spikes,
       predError: {unit: r.errUnit, n: r.errors.length, median: r.errors.length ? +median(r.errors).toFixed(3) : null, p90: r.errors.length ? +pct(r.errors, 0.9).toFixed(3) : null, worst: r.errors.length ? +Math.max(...r.errors).toFixed(3) : null},
       verifier: {kind: r.aiKind, checks: r.vChecked, passed: r.vPassed, library: libCounts, testAccuracy: S.testAcc || null},
-      failureCounts: counts, model: q('model').value, calibrated: !!calib(), walls: walls.length
+      failureCounts: counts, model: q('model').value, calibrated: cams.some(c => calib(c)), walls: walls.length,
+      cameras: r.cams, stereoPct: r.total ? +(100*r.stereo/r.total).toFixed(1) : 0, rayGapMedianFt: r.gaps.length ? +median(r.gaps).toFixed(3) : null
     };
   }
   function settingsSnapshot(){
     const ids = ['tol', 'strict', 'minpx', 'merge', 'model', 'balld', 'ahead', 'win', 'minspd', 'rlen', 'rgap', 'preset', 'vstrict', 'verifyOn', 'mirror'];
     const out = {}; for(const id of ids){ const el = q(id); if(el) out[id] = el.type === 'checkbox' ? el.checked : el.value; }
-    const c = calib();
-    return {...out, samples: samples.map(s => s.hsv.map(v => +v.toFixed(3))), rulers, walls,
-      camera: c ? {heightFt: +c.h.toFixed(3), tiltDeg: +(c.th*180/Math.PI).toFixed(2), focalPx: +c.f.toFixed(1)} : null,
+    const pose = c => c ? {heightFt: +c.h.toFixed(3), tiltDeg: +(c.tilt*180/Math.PI).toFixed(2), yawDeg: +(c.yaw*180/Math.PI).toFixed(2), focalPx: +c.f.toFixed(1),
+      xFt: +c.C.x.toFixed(3), outFt: +c.C.f.toFixed(3)} : null;
+    return {...out, samples: samples.map(s => s.hsv.map(v => +v.toFixed(3))), rulers: cams.map(c => c.rulers), walls,
+      cameras: cams.map(c => ({active: isActive(c), resolution: c.res, pose: pose(calib(c))})),
       fingerprint: S.ai.kind === 'ai' ? S.ai.name : 'basic', codeVersion: CODE_VERSION, userAgent: navigator.userAgent};
   }
   const PRIORITY = {user: 0, verify_fail: 1, jump: 2, spike: 3, lost: 4, predmiss: 5};
@@ -486,11 +501,11 @@ const Learn = (() => {
         .sort((a, b) => (PRIORITY[a.kind] - PRIORITY[b.kind]) || ((b.err || 0) - (a.err || 0))).slice(0, 10);
       const z = new JSZip(), stamp = sum.date.slice(0, 19).replace(/[:T]/g, '-');
       worst.forEach((f, i) => { f.file = `failures/${String(i + 1).padStart(2, '0')}_${f.kind}.jpg`; z.file(f.file, f.strip); });
-      const head = ['ms', 'locked', 'holding', 'track', 'u_px', 'v_px', 'diam_px', 'mode', 'x_ft', 'up_ft', 'out_ft', 'speed', 'verified', 'verifier_sim', 'candidates'];
+      const head = ['ms', 'locked', 'holding', 'track', 'u_px', 'v_px', 'diam_px', 'mode', 'x_ft', 'up_ft', 'out_ft', 'speed', 'verified', 'verifier_sim', 'candidates', 'cams_locked', 'stereo', 'ray_gap_ft'];
       z.file('log.csv', head.join(',') + '\n' + r.frames.map(row => row.join(',')).join('\n'));
       z.file('summary.json', JSON.stringify({summary: sum, previous: prev, events: r.events.map(e => ({ms: Math.round(e.t - r.startPerf), kind: e.kind, note: e.note}))}, null, 2));
       z.file('settings.json', JSON.stringify(settings, null, 2));
-      if(r.chunks.length){ const ext = (r.mime || '').includes('mp4') ? 'mp4' : 'webm'; z.file(`video.${ext}`, new Blob(r.chunks, {type: r.mime || 'video/webm'})); }
+      for(const m of r.media) if(m.chunks.length){ const ext = (m.mime || '').includes('mp4') ? 'mp4' : 'webm'; z.file(`video-cam${m.cam + 1}.${ext}`, new Blob(m.chunks, {type: m.mime || 'video/webm'})); }
       z.file('report.html', reportHTML(sum, prev, worst, settings, r));
       const blob = await z.generateAsync({type: 'blob'});
       download(blob, `tracker-report_${sum.run.replace(/[^A-Za-z0-9]+/g, '-')}_${stamp}.zip`);
@@ -512,7 +527,8 @@ const Learn = (() => {
       [`Prediction miss, typical (${u})`, s.predError.median ?? '—', better('predError.median', true)],
       [`Prediction miss, worst 10% (${u})`, s.predError.p90 ?? '—', better('predError.p90', true)],
       ['Frame rate', `${s.fpsAvg ?? '—'} fps (low ${s.fpsLow ?? '—'})`, better('fpsAvg', false)],
-      ['Library checks passed', s.verifier.checks ? `${s.verifier.passed}/${s.verifier.checks}` : 'not in use', '']
+      ['Library checks passed', s.verifier.checks ? `${s.verifier.passed}/${s.verifier.checks}` : 'not in use', ''],
+      ['Seen by both cameras (3D triangulated)', s.cameras > 1 ? `${s.stereoPct}% of frames · rays meet within ${s.rayGapMedianFt ?? '—'} ft` : 'one camera', s.cameras > 1 ? better('stereoPct', false) : '']
     ];
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tracker report · ${esc(s.run)}</title>
 <style>:root{--bg:#0e1214;--p:#161c1f;--l:#273136;--fg:#dfe7ea;--d:#7f8f96;--g:#3cff8f;--r:#ff5a4f;--b:#3aa0ff}
@@ -534,26 +550,35 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
   const ensureZip = () => window.JSZip ? Promise.resolve() : (zipLoading ||= loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'));
 
   // ------------------------------------------------------------------ replay
-  function replayFile(file){
-    if(liveStream()) stop();
+  // One file = camera 1. Two files (e.g. video-cam1 + video-cam2 from a report) = both cameras, started together.
+  function replayFiles(files){
+    stopAll();
+    const list = [...files].sort((a, b) => (/cam2/i.test(a.name) ? 1 : 0) - (/cam2/i.test(b.name) ? 1 : 0)).slice(0, 2);
     S.replay = true; S.replayBase = performance.now();
-    vid.srcObject = null; vid.src = URL.createObjectURL(file); vid.loop = false;
-    q('msg').hidden = true; q('hud').hidden = false;
+    let ended = 0, failed = false;
     const fail = () => {
-      vid.onerror = null; vid.onended = null; S.replay = false; vid.removeAttribute('src');
-      q('msg').hidden = false; q('msg').textContent = 'That file could not be played here. Use a video saved by the tracker (.webm), or an .mp4. iPhone .MOV files play in Safari but often not in Chrome.';
+      if(failed) return; failed = true; S.replay = false;
+      for(const cam of cams){ cam.vid.onerror = cam.vid.onended = null; cam.replay = false; cam.vid.removeAttribute('src'); }
+      layout(); q('msg').hidden = false; q('msg').textContent = 'That file could not be played here. Use a video saved by the tracker (.webm), or an .mp4. iPhone .MOV files play in Safari but often not in Chrome.';
       flash('That video could not be played.');
     };
-    vid.onerror = fail;
-    vid.onended = async () => { vid.onerror = null; if(S.rec) await stopRecording(); S.replay = false; flash('Replay finished. Click "Make report".'); };
-    vid.play().then(() => { trail = []; last = null; track = null; startRecording(); nextFrame(); }).catch(fail);
+    list.forEach((file, i) => {
+      const cam = cams[i]; cam.vid.srcObject = null; cam.vid.src = URL.createObjectURL(file); cam.vid.loop = false; cam.replay = true;
+      cam.vid.onerror = fail;
+      cam.vid.onended = async () => { cam.vid.onerror = null; cam.replay = false; if(++ended < list.length) return;
+        if(S.rec) await stopRecording(); S.replay = false; layout(); flash('Replay finished. Click "Make report".'); };
+    });
+    q('msg').hidden = true; q('hud').hidden = false; layout();
+    Promise.all(list.map((_, i) => cams[i].vid.play())).then(() => {
+      resetTracking(); startRecording(); list.forEach((_, i) => startLoop(cams[i]));
+    }).catch(fail);
   }
 
   // ------------------------------------------------------------ saved setup
-  const SETUP_IDS = ['tol', 'strict', 'minpx', 'merge', 'model', 'balld', 'ahead', 'win', 'minspd', 'rlen', 'rgap', 'preset', 'vstrict', 'verifyOn', 'mirror', 'trail', 'showmap', 'pred', 'recVideo', 'runName'];
+  const SETUP_IDS = ['tol', 'strict', 'minpx', 'merge', 'model', 'balld', 'ahead', 'win', 'minspd', 'rlen', 'rgap', 'preset', 'vstrict', 'verifyOn', 'mirror', 'trail', 'showmap', 'pred', 'recVideo', 'runName', 'viewMode'];
   let lastSaved = '';
   function saveSetup(){
-    const o = {samples, rulers, walls}; for(const id of SETUP_IDS){ const el = q(id); if(el) o[id] = el.type === 'checkbox' ? el.checked : el.value; }
+    const o = {samples, rulers: cams.map(c => c.rulers), walls}; for(const id of SETUP_IDS){ const el = q(id); if(el) o[id] = el.type === 'checkbox' ? el.checked : el.value; }
     const j = JSON.stringify(o); if(j === lastSaved) return; lastSaved = j;
     try{ localStorage.setItem('tracker-setup', j); } catch(e){}
   }
@@ -562,7 +587,8 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
     if(!o) return;
     for(const id of SETUP_IDS){ const el = q(id); if(!el || !(id in o)) continue; if(el.type === 'checkbox') el.checked = o[id]; else el.value = o[id]; el.dispatchEvent(new Event('input')); }
     if(Array.isArray(o.samples)) samples = o.samples;
-    if(o.rulers) rulers = o.rulers;
+    if(Array.isArray(o.rulers)) o.rulers.forEach((r, i) => { if(cams[i] && r) cams[i].rulers = r; });
+    else if(o.rulers) cams[0].rulers = o.rulers;                        // setups saved before camera 2
     if(Array.isArray(o.walls)) walls = o.walls;
     renderSwatches(); updateCalStatus();
   }
@@ -627,7 +653,7 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
     q('recBtn').onclick = () => S.rec ? stopRecording() : startRecording();
     q('reportBtn').onclick = makeReport;
     q('replayBtn').onclick = () => q('replayIn').click();
-    q('replayIn').onchange = e => { if(e.target.files[0]) replayFile(e.target.files[0]); e.target.value = ''; };
+    q('replayIn').onchange = e => { if(e.target.files.length) replayFiles(e.target.files); e.target.value = ''; };
     q('flagBtn').onclick = () => flagWrong();
     q('demoMode').onchange = e => setFrozen(e.target.checked);
     document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
@@ -651,11 +677,12 @@ ${worst.map((f, i) => `<div class="f"><span class="k">#${i + 1} ${esc(f.kind)}</
     const t = S.ring.length ? S.ring.at(-1).t : performance.now();
     event(t, 'user', 'You flagged this moment as wrong');
     if(S.cur && S.snap && !S.frozen){ suggest(S.snap, S.cur, 'not-target', 'high', 'you pressed W while locked on this', true); }
-    trail = []; last = null; track = null;
+    resetTracking();
     flash(S.rec ? 'Flagged. It will be in the report.' : 'Flagged. Record a run to keep flags in a report.');
   }
 
-  return {init, check, onFrame, afterDraw, labelClick, isReplay: () => S.replay, replayClock: mt => S.replayBase + mt*1000, setSnap: c => { S.snap = c; },
+  return {init, check, onFrame, afterDraw, labelClick, isReplay: () => S.replay, replayClock: mt => S.replayBase + mt*1000,
+          setSnap: (c, i = 0) => { S.snaps[i] = c; }, setBlobs: (i, b) => { S.blobs[i] = b; },
           // exposed for testing
           _S: S, addExample, undoLast, removeExamples, judge, testVerifier, startRecording, stopRecording, makeReport, summarize, suggest, acceptInbox, ready, fingerprint};
 })();
